@@ -20,28 +20,18 @@ import mondrian.spi.MemberFormatter;
  * @author jhyde
  * @since 6 August, 2001
  */
-public abstract class LevelBase
-    extends OlapElementBase
-    implements Level
-{
+public abstract class LevelBase extends OlapElementBase implements Level {
     protected final Hierarchy hierarchy;
     protected final String name;
     protected final String uniqueName;
     protected final String description;
     protected final int depth;
-    protected final LevelType levelType;
+    protected final org.olap4j.metadata.Level.Type levelType;
     protected MemberFormatter memberFormatter;
-    protected int  approxRowCount;
+    protected int approxRowCount;
 
-    protected LevelBase(
-        Hierarchy hierarchy,
-        String name,
-        String caption,
-        boolean visible,
-        String description,
-        int depth,
-        LevelType levelType)
-    {
+    protected LevelBase(Hierarchy hierarchy, String name, String caption, boolean visible, String description, int depth,
+        org.olap4j.metadata.Level.Type levelType) {
         this.hierarchy = hierarchy;
         this.name = name;
         this.caption = caption;
@@ -61,77 +51,80 @@ public abstract class LevelBase
     }
 
     // from Element
+    @Override
     public String getQualifiedName() {
-        return MondrianResource.instance().MdxLevelName.str(getUniqueName());
+        return MondrianResource.instance().MdxLevelName.str(this.getUniqueName());
     }
 
-    public LevelType getLevelType() {
-        return levelType;
+    @Override
+    public org.olap4j.metadata.Level.Type getLevelType() {
+        return this.levelType;
     }
 
+    @Override
     public String getUniqueName() {
-        return uniqueName;
+        return this.uniqueName;
     }
 
+    @Override
     public String getName() {
-        return name;
+        return this.name;
     }
 
+    @Override
     public String getDescription() {
-        return description;
+        return this.description;
     }
 
+    @Override
     public Hierarchy getHierarchy() {
-        return hierarchy;
+        return this.hierarchy;
     }
 
+    @Override
     public Dimension getDimension() {
-        return hierarchy.getDimension();
+        return this.hierarchy.getDimension();
     }
 
+    @Override
     public int getDepth() {
-        return depth;
+        return this.depth;
     }
 
+    @Override
     public Level getChildLevel() {
-        int childDepth = depth + 1;
-        Level[] levels = hierarchy.getLevels();
-        return (childDepth < levels.length)
-            ? levels[childDepth]
-            : null;
+        final int childDepth = this.depth + 1;
+        final Level[] levels = this.hierarchy.getLevels();
+        return (childDepth < levels.length) ? levels[childDepth] : null;
     }
 
+    @Override
     public Level getParentLevel() {
-        int parentDepth = depth - 1;
-        Level[] levels = hierarchy.getLevels();
-        return (parentDepth >= 0)
-            ? levels[parentDepth]
-            : null;
+        final int parentDepth = this.depth - 1;
+        final Level[] levels = this.hierarchy.getLevels();
+        return (parentDepth >= 0) ? levels[parentDepth] : null;
     }
 
+    @Override
     public abstract boolean isAll();
 
     public boolean isMeasure() {
-        return hierarchy.getName().equals("Measures");
+        return this.hierarchy.getName().equals("Measures");
     }
 
-    public OlapElement lookupChild(
-        SchemaReader schemaReader, Id.Segment s, MatchType matchType)
-    {
-        if (areMembersUnique()
-            && s instanceof Id.NameSegment)
-        {
-            return Util.lookupHierarchyRootMember(
-                schemaReader, hierarchy, ((Id.NameSegment) s), matchType);
+    @Override
+    public OlapElement lookupChild(SchemaReader schemaReader, Id.Segment s, MatchType matchType) {
+        if (this.areMembersUnique() && (s instanceof Id.NameSegment)) {
+            return Util.lookupHierarchyRootMember(schemaReader, this.hierarchy, ((Id.NameSegment) s), matchType);
         } else {
             return null;
         }
     }
 
+    @Override
     public MemberFormatter getMemberFormatter() {
-        return memberFormatter;
+        return this.memberFormatter;
     }
 }
-
 
 // End LevelBase.java

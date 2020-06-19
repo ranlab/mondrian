@@ -9,9 +9,9 @@
 
 package mondrian.olap4j;
 
-import mondrian.olap.*;
-import mondrian.rolap.RolapConnection;
-import mondrian.server.Locus;
+import java.util.AbstractList;
+import java.util.Arrays;
+import java.util.List;
 
 import org.olap4j.OlapException;
 import org.olap4j.impl.ArrayNamedListImpl;
@@ -20,10 +20,14 @@ import org.olap4j.metadata.Dimension;
 import org.olap4j.metadata.Hierarchy;
 import org.olap4j.metadata.Level;
 import org.olap4j.metadata.Member;
-import org.olap4j.metadata.*;
+import org.olap4j.metadata.NamedList;
 import org.olap4j.metadata.Property;
 
-import java.util.*;
+import mondrian.olap.OlapElement;
+import mondrian.olap.Role;
+import mondrian.olap.Util;
+import mondrian.rolap.RolapConnection;
+import mondrian.server.Locus;
 
 /**
  * Implementation of {@link Level}
@@ -32,10 +36,7 @@ import java.util.*;
  * @author jhyde
  * @since May 25, 2007
  */
-class MondrianOlap4jLevel
-    extends MondrianOlap4jMetadataElement
-    implements Level, Named
-{
+class MondrianOlap4jLevel extends MondrianOlap4jMetadataElement implements Level, Named {
     final MondrianOlap4jSchema olap4jSchema;
     final mondrian.olap.Level level;
 
@@ -45,85 +46,89 @@ class MondrianOlap4jLevel
      * @param olap4jSchema Schema
      * @param level Mondrian level
      */
-    MondrianOlap4jLevel(
-        MondrianOlap4jSchema olap4jSchema,
-        mondrian.olap.Level level)
-    {
+    MondrianOlap4jLevel(MondrianOlap4jSchema olap4jSchema, mondrian.olap.Level level) {
         this.olap4jSchema = olap4jSchema;
         this.level = level;
     }
 
+    @Override
     public boolean equals(Object obj) {
-        return obj instanceof MondrianOlap4jLevel
-            && level.equals(((MondrianOlap4jLevel) obj).level);
+        return (obj instanceof MondrianOlap4jLevel) && this.level.equals(((MondrianOlap4jLevel) obj).level);
     }
 
+    @Override
     public int hashCode() {
-        return level.hashCode();
+        return this.level.hashCode();
     }
 
+    @Override
     public int getDepth() {
-        return level.getDepth() - getDepthOffset();
+        return this.level.getDepth() - this.getDepthOffset();
     }
 
     private int getDepthOffset() {
-        final Role.HierarchyAccess accessDetails =
-            olap4jSchema.olap4jCatalog.olap4jDatabaseMetaData.olap4jConnection
-                .getMondrianConnection2().getRole().getAccessDetails(
-                    level.getHierarchy());
+        final Role.HierarchyAccess accessDetails = this.olap4jSchema.olap4jCatalog.olap4jDatabaseMetaData.olap4jConnection
+            .getMondrianConnection2()
+                .getRole()
+                .getAccessDetails(this.level.getHierarchy());
         if (accessDetails == null) {
             return 0;
         }
         return accessDetails.getTopLevelDepth();
     }
 
+    @Override
     public Hierarchy getHierarchy() {
-        return new MondrianOlap4jHierarchy(olap4jSchema, level.getHierarchy());
+        return new MondrianOlap4jHierarchy(this.olap4jSchema, this.level.getHierarchy());
     }
 
+    @Override
     public Dimension getDimension() {
-        return new MondrianOlap4jDimension(olap4jSchema, level.getDimension());
+        return new MondrianOlap4jDimension(this.olap4jSchema, this.level.getDimension());
     }
 
+    @Override
     public boolean isCalculated() {
         return false;
     }
 
+    @Override
     public Type getLevelType() {
-        if (level.isAll()) {
+        if (this.level.isAll()) {
             return Type.ALL;
         }
-        switch (level.getLevelType()) {
-        case Regular:
-            return Type.REGULAR;
-        case TimeDays:
-            return Type.TIME_DAYS;
-        case TimeHalfYears:
-            return Type.TIME_HALF_YEAR;
-        case TimeHours:
-            return Type.TIME_HOURS;
-        case TimeMinutes:
-            return Type.TIME_MINUTES;
-        case TimeMonths:
-            return Type.TIME_MONTHS;
-        case TimeQuarters:
-            return Type.TIME_QUARTERS;
-        case TimeSeconds:
-            return Type.TIME_SECONDS;
-        case TimeUndefined:
-            return Type.TIME_UNDEFINED;
-        case TimeWeeks:
-            return Type.TIME_WEEKS;
-        case TimeYears:
-            return Type.TIME_YEARS;
-        case Null:
-        default:
-            throw Util.unexpected(level.getLevelType());
+        switch (this.level.getLevelType()) {
+            case REGULAR:
+                return Type.REGULAR;
+            case TIME_DAYS:
+                return Type.TIME_DAYS;
+            case TIME_HALF_YEAR:
+                return Type.TIME_HALF_YEAR;
+            case TIME_HOURS:
+                return Type.TIME_HOURS;
+            case TIME_MINUTES:
+                return Type.TIME_MINUTES;
+            case TIME_MONTHS:
+                return Type.TIME_MONTHS;
+            case TIME_QUARTERS:
+                return Type.TIME_QUARTERS;
+            case TIME_SECONDS:
+                return Type.TIME_SECONDS;
+            case TIME_UNDEFINED:
+                return Type.TIME_UNDEFINED;
+            case TIME_WEEKS:
+                return Type.TIME_WEEKS;
+            case TIME_YEARS:
+                return Type.TIME_YEARS;
+            case NULL:
+            default:
+                throw Util.unexpected(this.level.getLevelType());
         }
     }
 
+    @Override
     public NamedList<Property> getProperties() {
-        return getProperties(true);
+        return this.getProperties(true);
     }
 
     /**
@@ -137,81 +142,81 @@ class MondrianOlap4jLevel
      */
     NamedList<Property> getProperties(boolean includeStandard) {
         final NamedList<Property> list = new ArrayNamedListImpl<Property>() {
+            @Override
             public String getName(Object property) {
-                return ((Property)property).getName();
+                return ((Property) property).getName();
             }
         };
         // standard properties first
         if (includeStandard) {
-            list.addAll(
-                Arrays.asList(Property.StandardMemberProperty.values()));
+            list.addAll(Arrays.asList(Property.StandardMemberProperty.values()));
             list.addAll(MondrianOlap4jProperty.MEMBER_EXTENSIONS.values());
         }
         // then level-specific properties
-        for (mondrian.olap.Property property : level.getProperties()) {
+        for (final mondrian.olap.Property property : this.level.getProperties()) {
             list.add(new MondrianOlap4jProperty(property));
         }
         return list;
     }
 
-    public List<Member> getMembers() throws OlapException {
-        final MondrianOlap4jConnection olap4jConnection =
-            olap4jSchema.olap4jCatalog.olap4jDatabaseMetaData.olap4jConnection;
-        final RolapConnection mondrianConnection =
-            olap4jConnection.getMondrianConnection();
-        return Locus.execute(
-            mondrianConnection,
-            "Reading members of level",
-            new Locus.Action<List<Member>>() {
-                public List<Member> execute() {
-                    final mondrian.olap.SchemaReader schemaReader =
-                        mondrianConnection.getSchemaReader().withLocus();
-                    final List<mondrian.olap.Member> levelMembers =
-                        schemaReader.getLevelMembers(level, true);
-                    return new AbstractList<Member>() {
-                        public Member get(int index) {
-                            return olap4jConnection.toOlap4j(
-                                levelMembers.get(index));
-                        }
+    @Override
+    public List<Member> getMembers()
+        throws OlapException {
+        final MondrianOlap4jConnection olap4jConnection = this.olap4jSchema.olap4jCatalog.olap4jDatabaseMetaData.olap4jConnection;
+        final RolapConnection mondrianConnection = olap4jConnection.getMondrianConnection();
+        return Locus.execute(mondrianConnection, "Reading members of level", new Locus.Action<List<Member>>() {
+            @Override
+            public List<Member> execute() {
+                final mondrian.olap.SchemaReader schemaReader = mondrianConnection.getSchemaReader().withLocus();
+                final List<mondrian.olap.Member> levelMembers = schemaReader.getLevelMembers(MondrianOlap4jLevel.this.level, true);
+                return new AbstractList<Member>() {
+                    @Override
+                    public Member get(int index) {
+                        return olap4jConnection.toOlap4j(levelMembers.get(index));
+                    }
 
-                        public int size() {
-                            return levelMembers.size();
-                        }
-                    };
-                }
-            });
+                    @Override
+                    public int size() {
+                        return levelMembers.size();
+                    }
+                };
+            }
+        });
     }
 
+    @Override
     public String getName() {
-        return level.getName();
+        return this.level.getName();
     }
 
+    @Override
     public String getUniqueName() {
-        return level.getUniqueName();
+        return this.level.getUniqueName();
     }
 
+    @Override
     public String getCaption() {
-        return level.getLocalized(
-            OlapElement.LocalizedProperty.CAPTION,
-            olap4jSchema.getLocale());
+        return this.level.getLocalized(OlapElement.LocalizedProperty.CAPTION, this.olap4jSchema.getLocale());
     }
 
+    @Override
     public String getDescription() {
-        return level.getLocalized(
-            OlapElement.LocalizedProperty.DESCRIPTION,
-            olap4jSchema.getLocale());
+        return this.level.getLocalized(OlapElement.LocalizedProperty.DESCRIPTION, this.olap4jSchema.getLocale());
     }
 
+    @Override
     public int getCardinality() {
-        return level.getApproxRowCount();
+        return this.level.getApproxRowCount();
     }
 
+    @Override
     public boolean isVisible() {
-        return level.isVisible();
+        return this.level.isVisible();
     }
 
+    @Override
     protected OlapElement getOlapElement() {
-        return level;
+        return this.level;
     }
 }
 

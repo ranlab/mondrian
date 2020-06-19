@@ -10,21 +10,32 @@
 */
 package mondrian.rolap;
 
-import mondrian.olap.*;
+import java.util.AbstractList;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+
+import org.apache.log4j.Logger;
+import org.olap4j.impl.UnmodifiableArrayMap;
+
+import mondrian.olap.Annotation;
+import mondrian.olap.Dimension;
+import mondrian.olap.DimensionType;
+import mondrian.olap.Id;
+import mondrian.olap.Level;
+import mondrian.olap.LevelBase;
+import mondrian.olap.MatchType;
+import mondrian.olap.Member;
+import mondrian.olap.MondrianDef;
+import mondrian.olap.OlapElement;
+import mondrian.olap.Property;
+import mondrian.olap.SchemaReader;
+import mondrian.olap.Util;
 import mondrian.resource.MondrianResource;
 import mondrian.rolap.format.FormatterCreateContext;
 import mondrian.rolap.format.FormatterFactory;
 import mondrian.spi.Dialect;
 import mondrian.spi.PropertyFormatter;
-
-import org.apache.log4j.Logger;
-
-import org.olap4j.impl.UnmodifiableArrayMap;
-
-import java.util.AbstractList;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
 
 /**
  * <code>RolapLevel</code> implements {@link Level} for a ROLAP database.
@@ -94,143 +105,110 @@ public class RolapLevel extends LevelBase {
      * @pre levelType != null
      * @pre hideMemberCondition != null
      */
-    RolapLevel(
-        RolapHierarchy hierarchy,
-        String name,
-        String caption,
-        boolean visible,
-        String description,
-        int depth,
-        MondrianDef.Expression keyExp,
-        MondrianDef.Expression nameExp,
-        MondrianDef.Expression captionExp,
-        MondrianDef.Expression ordinalExp,
-        MondrianDef.Expression parentExp,
-        String nullParentValue,
-        MondrianDef.Closure xmlClosure,
-        RolapProperty[] properties,
-        int flags,
-        Dialect.Datatype datatype,
-        SqlStatement.Type internalType,
-        HideMemberCondition hideMemberCondition,
-        LevelType levelType,
-        String approxRowCount,
-        Map<String, Annotation> annotationMap)
-    {
-        super(
-            hierarchy, name, caption, visible, description, depth, levelType);
+    RolapLevel(RolapHierarchy hierarchy, String name, String caption, boolean visible, String description, int depth,
+        MondrianDef.Expression keyExp, MondrianDef.Expression nameExp, MondrianDef.Expression captionExp, MondrianDef.Expression ordinalExp,
+        MondrianDef.Expression parentExp, String nullParentValue, MondrianDef.Closure xmlClosure, RolapProperty[] properties, int flags,
+        Dialect.Datatype datatype, SqlStatement.Type internalType, HideMemberCondition hideMemberCondition,
+        org.olap4j.metadata.Level.Type levelType, String approxRowCount, Map<String, Annotation> annotationMap) {
+        super(hierarchy, name, caption, visible, description, depth, levelType);
         assert annotationMap != null;
         Util.assertPrecondition(properties != null, "properties != null");
-        Util.assertPrecondition(
-            hideMemberCondition != null,
-            "hideMemberCondition != null");
+        Util.assertPrecondition(hideMemberCondition != null, "hideMemberCondition != null");
         Util.assertPrecondition(levelType != null, "levelType != null");
 
         if (keyExp instanceof MondrianDef.Column) {
-            checkColumn((MondrianDef.Column) keyExp);
+            this.checkColumn((MondrianDef.Column) keyExp);
         }
         this.annotationMap = annotationMap;
-        this.approxRowCount = loadApproxRowCount(approxRowCount);
+        this.approxRowCount = this.loadApproxRowCount(approxRowCount);
         this.flags = flags;
         this.datatype = datatype;
         this.keyExp = keyExp;
         if (nameExp != null) {
             if (nameExp instanceof MondrianDef.Column) {
-                checkColumn((MondrianDef.Column) nameExp);
+                this.checkColumn((MondrianDef.Column) nameExp);
             }
         }
         this.nameExp = nameExp;
         if (captionExp != null) {
             if (captionExp instanceof MondrianDef.Column) {
-                checkColumn((MondrianDef.Column) captionExp);
+                this.checkColumn((MondrianDef.Column) captionExp);
             }
         }
         this.captionExp = captionExp;
         if (ordinalExp != null) {
             if (ordinalExp instanceof MondrianDef.Column) {
-                checkColumn((MondrianDef.Column) ordinalExp);
+                this.checkColumn((MondrianDef.Column) ordinalExp);
             }
             this.ordinalExp = ordinalExp;
         } else {
             this.ordinalExp = this.keyExp;
         }
         if (parentExp instanceof MondrianDef.Column) {
-            checkColumn((MondrianDef.Column) parentExp);
+            this.checkColumn((MondrianDef.Column) parentExp);
         }
         this.parentExp = parentExp;
         if (parentExp != null) {
-            Util.assertTrue(
-                !isAll(),
-                "'All' level '" + this + "' must not be parent-child");
-            Util.assertTrue(
-                isUnique(),
-                "Parent-child level '" + this
-                + "' must have uniqueMembers=\"true\"");
+            Util.assertTrue(!this.isAll(), "'All' level '" + this + "' must not be parent-child");
+            Util.assertTrue(this.isUnique(), "Parent-child level '" + this + "' must have uniqueMembers=\"true\"");
         }
         this.nullParentValue = nullParentValue;
-        Util.assertPrecondition(
-            parentExp != null || nullParentValue == null,
-            "parentExp != null || nullParentValue == null");
+        Util.assertPrecondition((parentExp != null) || (nullParentValue == null), "parentExp != null || nullParentValue == null");
         this.xmlClosure = xmlClosure;
-        for (RolapProperty property : properties) {
+        for (final RolapProperty property : properties) {
             if (property.getExp() instanceof MondrianDef.Column) {
-                checkColumn((MondrianDef.Column) property.getExp());
+                this.checkColumn((MondrianDef.Column) property.getExp());
             }
         }
         this.properties = properties;
-        List<Property> list = new ArrayList<Property>();
-        for (Level level = this; level != null;
-             level = level.getParentLevel())
-        {
+        final List<Property> list = new ArrayList<Property>();
+        for (Level level = this; level != null; level = level.getParentLevel()) {
             final Property[] levelProperties = level.getProperties();
             for (final Property levelProperty : levelProperties) {
-                Property existingProperty = lookupProperty(
-                    list, levelProperty.getName());
+                final Property existingProperty = this.lookupProperty(list, levelProperty.getName());
                 if (existingProperty == null) {
                     list.add(levelProperty);
-                } else if (existingProperty.getType()
-                    != levelProperty.getType())
-                {
-                    throw Util.newError(
-                        "Property " + this.getName() + "."
-                        + levelProperty.getName() + " overrides a "
-                        + "property with the same name but different type");
+                } else if (existingProperty.getType() != levelProperty.getType()) {
+                    throw Util
+                        .newError("Property " + this.getName()
+                            + "."
+                            + levelProperty.getName()
+                            + " overrides a "
+                            + "property with the same name but different type");
                 }
             }
         }
         this.inheritedProperties = list.toArray(new RolapProperty[list.size()]);
 
-        Dimension dim = hierarchy.getDimension();
+        final Dimension dim = hierarchy.getDimension();
         if (dim.getDimensionType() == DimensionType.TimeDimension) {
-            if (!levelType.isTime() && !isAll()) {
-                throw MondrianResource.instance()
-                    .NonTimeLevelInTimeHierarchy.ex(getUniqueName());
+            if (!levelType.isTime() && !this.isAll()) {
+                throw MondrianResource.instance().NonTimeLevelInTimeHierarchy.ex(this.getUniqueName());
             }
         } else if (dim.getDimensionType() == null) {
             // there was no dimension type assigned to the dimension
             // - check later
         } else {
             if (levelType.isTime()) {
-                throw MondrianResource.instance()
-                    .TimeLevelInNonTimeHierarchy.ex(getUniqueName());
+                throw MondrianResource.instance().TimeLevelInNonTimeHierarchy.ex(this.getUniqueName());
             }
         }
         this.internalType = internalType;
         this.hideMemberCondition = hideMemberCondition;
     }
 
+    @Override
     public RolapHierarchy getHierarchy() {
-        return (RolapHierarchy) hierarchy;
+        return (RolapHierarchy) this.hierarchy;
     }
 
+    @Override
     public Map<String, Annotation> getAnnotationMap() {
-        return annotationMap;
+        return this.annotationMap;
     }
 
     private int loadApproxRowCount(String approxRowCount) {
-        boolean notNullAndNumeric =
-            approxRowCount != null
-                && approxRowCount.matches("^\\d+$");
+        final boolean notNullAndNumeric = (approxRowCount != null) && approxRowCount.matches("^\\d+$");
         if (notNullAndNumeric) {
             return Integer.parseInt(approxRowCount);
         } else {
@@ -239,6 +217,7 @@ public class RolapLevel extends LevelBase {
         }
     }
 
+    @Override
     protected Logger getLogger() {
         return LOGGER;
     }
@@ -246,73 +225,72 @@ public class RolapLevel extends LevelBase {
     String getTableName() {
         String tableName = null;
 
-        MondrianDef.Expression expr = getKeyExp();
+        final MondrianDef.Expression expr = this.getKeyExp();
         if (expr instanceof MondrianDef.Column) {
-            MondrianDef.Column mc = (MondrianDef.Column) expr;
+            final MondrianDef.Column mc = (MondrianDef.Column) expr;
             tableName = mc.getTableAlias();
         }
         return tableName;
     }
 
     public MondrianDef.Expression getKeyExp() {
-        return keyExp;
+        return this.keyExp;
     }
 
     public MondrianDef.Expression getOrdinalExp() {
-        return ordinalExp;
+        return this.ordinalExp;
     }
 
     public MondrianDef.Expression getCaptionExp() {
-        return captionExp;
+        return this.captionExp;
     }
 
     public boolean hasCaptionColumn() {
-        return captionExp != null;
+        return this.captionExp != null;
     }
 
     public boolean hasOrdinalExp() {
-      return !getOrdinalExp().equals(getKeyExp());
+        return !this.getOrdinalExp().equals(this.getKeyExp());
     }
 
     final int getFlags() {
-        return flags;
+        return this.flags;
     }
 
     HideMemberCondition getHideMemberCondition() {
-        return hideMemberCondition;
+        return this.hideMemberCondition;
     }
 
     public final boolean isUnique() {
-        return (flags & FLAG_UNIQUE) != 0;
+        return (this.flags & FLAG_UNIQUE) != 0;
     }
 
     public final Dialect.Datatype getDatatype() {
-        return datatype;
+        return this.datatype;
     }
 
     final String getNullParentValue() {
-        return nullParentValue;
+        return this.nullParentValue;
     }
 
     /**
      * Returns whether this level is parent-child.
      */
     public boolean isParentChild() {
-        return parentExp != null;
+        return this.parentExp != null;
     }
 
     MondrianDef.Expression getParentExp() {
-        return parentExp;
+        return this.parentExp;
     }
 
     // RME: this has to be public for two of the DrillThroughTest test.
-    public
-    MondrianDef.Expression getNameExp() {
-        return nameExp;
+    public MondrianDef.Expression getNameExp() {
+        return this.nameExp;
     }
 
     private Property lookupProperty(List<Property> list, String propertyName) {
-        for (Property property : list) {
+        for (final Property property : list) {
             if (property.getName().equals(propertyName)) {
                 return property;
             }
@@ -320,93 +298,52 @@ public class RolapLevel extends LevelBase {
         return null;
     }
 
-    RolapLevel(
-        RolapHierarchy hierarchy,
-        int depth,
-        MondrianDef.Level xmlLevel)
-    {
-        this(
-            hierarchy,
-            xmlLevel.name,
-            xmlLevel.caption,
-            xmlLevel.visible,
-            xmlLevel.description,
-            depth,
-            xmlLevel.getKeyExp(),
-            xmlLevel.getNameExp(),
-            xmlLevel.getCaptionExp(),
-            xmlLevel.getOrdinalExp(),
-            xmlLevel.getParentExp(),
-            xmlLevel.nullParentValue,
-            xmlLevel.closure,
-            createProperties(xmlLevel),
-            (xmlLevel.uniqueMembers ? FLAG_UNIQUE : 0),
-            xmlLevel.getDatatype(),
-            toInternalType(xmlLevel.internalType),
-            HideMemberCondition.valueOf(xmlLevel.hideMemberIf),
-            LevelType.valueOf(
-                xmlLevel.levelType.equals("TimeHalfYear")
-                    ? "TimeHalfYears"
-                    : xmlLevel.levelType),
-            xmlLevel.approxRowCount,
-            RolapHierarchy.createAnnotationMap(xmlLevel.annotations));
+    RolapLevel(RolapHierarchy hierarchy, int depth, MondrianDef.Level xmlLevel) {
+        this(hierarchy, xmlLevel.name, xmlLevel.caption, xmlLevel.visible, xmlLevel.description, depth, xmlLevel.getKeyExp(),
+            xmlLevel.getNameExp(), xmlLevel.getCaptionExp(), xmlLevel.getOrdinalExp(), xmlLevel.getParentExp(), xmlLevel.nullParentValue,
+            xmlLevel.closure, createProperties(xmlLevel), (xmlLevel.uniqueMembers ? FLAG_UNIQUE : 0), xmlLevel.getDatatype(),
+            toInternalType(xmlLevel.internalType), HideMemberCondition.valueOf(xmlLevel.hideMemberIf), //
+            RolapLevel.convertLevelTypeNameToLevelType(xmlLevel.levelType), //
+            xmlLevel.approxRowCount, RolapHierarchy.createAnnotationMap(xmlLevel.annotations));
 
         if (!Util.isEmpty(xmlLevel.caption)) {
-            setCaption(xmlLevel.caption);
+            this.setCaption(xmlLevel.caption);
         }
 
-        FormatterCreateContext memberFormatterContext =
-            new FormatterCreateContext.Builder(getUniqueName())
-                .formatterDef(xmlLevel.memberFormatter)
+        final FormatterCreateContext memberFormatterContext = new FormatterCreateContext.Builder(this.getUniqueName())
+            .formatterDef(xmlLevel.memberFormatter)
                 .formatterAttr(xmlLevel.formatter)
                 .build();
-        memberFormatter =
-            FormatterFactory.instance()
-                .createRolapMemberFormatter(memberFormatterContext);
+        this.memberFormatter = FormatterFactory.instance().createRolapMemberFormatter(memberFormatterContext);
     }
 
     // helper for constructor
-    private static RolapProperty[] createProperties(MondrianDef.Level xmlLevel)
-    {
-        List<RolapProperty> list = new ArrayList<RolapProperty>();
+    private static RolapProperty[] createProperties(MondrianDef.Level xmlLevel) {
+        final List<RolapProperty> list = new ArrayList<RolapProperty>();
         final MondrianDef.Expression nameExp = xmlLevel.getNameExp();
 
         if (nameExp != null) {
-            list.add(
-                new RolapProperty(
-                    Property.NAME.name, Property.Datatype.TYPE_STRING,
-                    nameExp, null, null, null, true,
+            list
+                .add(new RolapProperty(Property.NAME.name, Property.Datatype.TYPE_STRING, nameExp, null, null, null, true,
                     Property.NAME.description));
         }
         for (int i = 0; i < xmlLevel.properties.length; i++) {
-            MondrianDef.Property xmlProperty = xmlLevel.properties[i];
+            final MondrianDef.Property xmlProperty = xmlLevel.properties[i];
 
-            FormatterCreateContext formatterContext =
-                    new FormatterCreateContext.Builder(xmlProperty.name)
-                        .formatterDef(xmlProperty.propertyFormatter)
-                        .formatterAttr(xmlProperty.formatter)
-                        .build();
-            PropertyFormatter formatter =
-                FormatterFactory.instance()
-                    .createPropertyFormatter(formatterContext);
+            final FormatterCreateContext formatterContext = new FormatterCreateContext.Builder(xmlProperty.name)
+                .formatterDef(xmlProperty.propertyFormatter)
+                    .formatterAttr(xmlProperty.formatter)
+                    .build();
+            final PropertyFormatter formatter = FormatterFactory.instance().createPropertyFormatter(formatterContext);
 
-            list.add(
-                new RolapProperty(
-                    xmlProperty.name,
-                    convertPropertyTypeNameToCode(xmlProperty.type),
-                    xmlLevel.getPropertyExp(i),
-                    formatter,
-                    xmlProperty.caption,
-                    xmlLevel.properties[i].dependsOnLevelValue,
-                    false,
-                    xmlProperty.description));
+            list
+                .add(new RolapProperty(xmlProperty.name, convertPropertyTypeNameToCode(xmlProperty.type), xmlLevel.getPropertyExp(i),
+                    formatter, xmlProperty.caption, xmlLevel.properties[i].dependsOnLevelValue, false, xmlProperty.description));
         }
         return list.toArray(new RolapProperty[list.size()]);
     }
 
-    private static Property.Datatype convertPropertyTypeNameToCode(
-        String type)
-    {
+    private static Property.Datatype convertPropertyTypeNameToCode(String type) {
         if (type.equals("String")) {
             return Property.Datatype.TYPE_STRING;
         } else if (type.equals("Numeric")) {
@@ -428,79 +365,142 @@ public class RolapLevel extends LevelBase {
         }
     }
 
+    /**
+     * Konvertiert einen Wert aus {@link mondrian.olap.MondrianDef.Level._levelType_values} zu einem
+     * LevelType.
+     * @param newLevelType obligatorisch, Stringrepräsentation von einem Level-Type
+     * @return obligatorisch, Level-Type
+     */
+    private static org.olap4j.metadata.Level.Type convertLevelTypeNameToLevelType(java.lang.String newLevelType) {
+        org.olap4j.metadata.Level.Type levelType;
+        switch (newLevelType) {
+            case "Regular":
+                levelType = org.olap4j.metadata.Level.Type.REGULAR;
+                break;
+            case "TimeYears":
+                levelType = org.olap4j.metadata.Level.Type.TIME_YEARS;
+                break;
+            case "TimeHalfYears":
+            case "TimeHalfYear":
+                levelType = org.olap4j.metadata.Level.Type.TIME_HALF_YEAR;
+                break;
+            case "TimeQuarters":
+                levelType = org.olap4j.metadata.Level.Type.TIME_QUARTERS;
+                break;
+            case "TimeMonths":
+                levelType = org.olap4j.metadata.Level.Type.TIME_MONTHS;
+                break;
+            case "TimeWeeks":
+                levelType = org.olap4j.metadata.Level.Type.TIME_WEEKS;
+                break;
+            case "TimeDays":
+                levelType = org.olap4j.metadata.Level.Type.TIME_DAYS;
+                break;
+            case "TimeHours":
+                levelType = org.olap4j.metadata.Level.Type.TIME_HOURS;
+                break;
+            case "TimeMinutes":
+                levelType = org.olap4j.metadata.Level.Type.TIME_MINUTES;
+                break;
+            case "TimeSeconds":
+                levelType = org.olap4j.metadata.Level.Type.TIME_SECONDS;
+                break;
+            case "TimeUndefined":
+                levelType = org.olap4j.metadata.Level.Type.TIME_UNDEFINED;
+                break;
+            default:
+                levelType = org.olap4j.metadata.Level.Type.NULL;
+        }
+        return levelType;
+    }
+
     private void checkColumn(MondrianDef.Column nameColumn) {
-        final RolapHierarchy rolapHierarchy = (RolapHierarchy) hierarchy;
+        final RolapHierarchy rolapHierarchy = (RolapHierarchy) this.hierarchy;
         if (nameColumn.table == null) {
             final MondrianDef.Relation table = rolapHierarchy.getUniqueTable();
             if (table == null) {
-                throw Util.newError(
-                    "must specify a table for level " + getUniqueName()
-                    + " because hierarchy has more than one table");
+                throw Util
+                    .newError("must specify a table for level " + this.getUniqueName() + " because hierarchy has more than one table");
             }
             nameColumn.table = table.getAlias();
         } else {
             if (!rolapHierarchy.tableExists(nameColumn.table)) {
-                throw Util.newError(
-                    "Table '" + nameColumn.table + "' not found");
+                throw Util.newError("Table '" + nameColumn.table + "' not found");
             }
         }
     }
 
     void init(MondrianDef.CubeDimension xmlDimension) {
-        if (xmlClosure != null) {
-            final RolapDimension dimension = ((RolapHierarchy) hierarchy)
-                .createClosedPeerDimension(this, xmlClosure, xmlDimension);
-            closedPeerLevel =
-                    (RolapLevel) dimension.getHierarchies()[0].getLevels()[1];
+        if (this.xmlClosure != null) {
+            final RolapDimension dimension = ((RolapHierarchy) this.hierarchy)
+                .createClosedPeerDimension(this, this.xmlClosure, xmlDimension);
+            this.closedPeerLevel = (RolapLevel) dimension.getHierarchies()[0].getLevels()[1];
         }
     }
 
+    @Override
     public final boolean isAll() {
-        return (flags & FLAG_ALL) != 0;
+        return (this.flags & FLAG_ALL) != 0;
     }
 
+    @Override
     public boolean areMembersUnique() {
-        return (depth == 0) || (depth == 1) && hierarchy.hasAll();
+        return (this.depth == 0) || ((this.depth == 1) && this.hierarchy.hasAll());
     }
 
     public String getTableAlias() {
-        return keyExp.getTableAlias();
+        return this.keyExp.getTableAlias();
     }
 
+    @Override
     public RolapProperty[] getProperties() {
-        return properties;
+        return this.properties;
     }
 
+    @Override
     public Property[] getInheritedProperties() {
-        return inheritedProperties;
+        return this.inheritedProperties;
     }
 
+    @Override
     public int getApproxRowCount() {
-        return approxRowCount;
+        return this.approxRowCount;
     }
 
-    private static final Map<String, SqlStatement.Type> VALUES =
-        UnmodifiableArrayMap.of(
-            "int", SqlStatement.Type.INT,
-            "double", SqlStatement.Type.DOUBLE,
-            "Object", SqlStatement.Type.OBJECT,
-            "String", SqlStatement.Type.STRING,
-            "long", SqlStatement.Type.LONG);
+    private static final Map<String, SqlStatement.Type> VALUES = UnmodifiableArrayMap
+        .of("int",
+            SqlStatement.Type.INT,
+            "double",
+            SqlStatement.Type.DOUBLE,
+            "Object",
+            SqlStatement.Type.OBJECT,
+            "String",
+            SqlStatement.Type.STRING,
+            "long",
+            SqlStatement.Type.LONG,
+            "date",
+            SqlStatement.Type.DATE,
+            "datetime",
+            SqlStatement.Type.TIMESTAMP,
+            "timestamp",
+            SqlStatement.Type.TIMESTAMP,
+            "time",
+            SqlStatement.Type.TIME);
 
     private static SqlStatement.Type toInternalType(String internalTypeName) {
-        SqlStatement.Type type = VALUES.get(internalTypeName);
-        if (type == null && internalTypeName != null) {
-            throw Util.newError(
-                "Invalid value '" + internalTypeName
-                + "' for attribute 'internalType' of element 'Level'. "
-                + "Valid values are: "
-                + VALUES.keySet());
+        final SqlStatement.Type type = VALUES.get(internalTypeName);
+        if ((type == null) && (internalTypeName != null)) {
+            throw Util
+                .newError("Invalid value '" + internalTypeName
+                    + "' for attribute 'internalType' of element 'Level'. "
+                    + "Valid values are: "
+                    + VALUES.keySet());
         }
         return type;
     }
 
     public SqlStatement.Type getInternalType() {
-        return internalType;
+        return this.internalType;
     }
 
     /**
@@ -519,16 +519,15 @@ public class RolapLevel extends LevelBase {
     }
 
     public OlapElement lookupChild(SchemaReader schemaReader, Id.Segment name) {
-        return lookupChild(schemaReader, name, MatchType.EXACT);
+        return this.lookupChild(schemaReader, name, MatchType.EXACT);
     }
 
-    public OlapElement lookupChild(
-        SchemaReader schemaReader, Id.Segment name, MatchType matchType)
-    {
+    @Override
+    public OlapElement lookupChild(SchemaReader schemaReader, Id.Segment name, MatchType matchType) {
         if (name instanceof Id.KeySegment) {
-            Id.KeySegment keySegment = (Id.KeySegment) name;
-            List<Comparable> keyValues = new ArrayList<Comparable>();
-            for (Id.NameSegment nameSegment : keySegment.getKeyParts()) {
+            final Id.KeySegment keySegment = (Id.KeySegment) name;
+            final List<Comparable> keyValues = new ArrayList<Comparable>();
+            for (final Id.NameSegment nameSegment : keySegment.getKeyParts()) {
                 final String keyValue = nameSegment.name;
                 if (RolapUtil.mdxNullLiteral().equalsIgnoreCase(keyValue)) {
                     keyValues.add(RolapUtil.sqlNullValue);
@@ -536,44 +535,40 @@ public class RolapLevel extends LevelBase {
                     keyValues.add(keyValue);
                 }
             }
-            final List<MondrianDef.Expression> keyExps = getInheritedKeyExps();
+            final List<MondrianDef.Expression> keyExps = this.getInheritedKeyExps();
             if (keyExps.size() != keyValues.size()) {
-                throw Util.newError(
-                    "Wrong number of values in member key; "
-                    + keySegment + " has " + keyValues.size()
-                    + " values, whereas level's key has " + keyExps.size()
-                    + " columns "
-                    + new AbstractList<String>() {
-                        public String get(int index) {
-                            return keyExps.get(index).getGenericExpression();
-                        }
+                throw Util
+                    .newError("Wrong number of values in member key; " + keySegment
+                        + " has "
+                        + keyValues.size()
+                        + " values, whereas level's key has "
+                        + keyExps.size()
+                        + " columns "
+                        + new AbstractList<String>() {
+                            @Override
+                            public String get(int index) {
+                                return keyExps.get(index).getGenericExpression();
+                            }
 
-                        public int size() {
-                            return keyExps.size();
+                            @Override
+                            public int size() {
+                                return keyExps.size();
+                            }
                         }
-                    }
-                    + ".");
+                        + ".");
             }
-            return getHierarchy().getMemberReader().getMemberByKey(
-                this, keyValues);
+            return this.getHierarchy().getMemberReader().getMemberByKey(this, keyValues);
         }
-        List<Member> levelMembers = schemaReader.getLevelMembers(this, true);
+        final List<Member> levelMembers = schemaReader.getLevelMembers(this, true);
         if (levelMembers.size() > 0) {
-            Member parent = levelMembers.get(0).getParentMember();
-            return
-                RolapUtil.findBestMemberMatch(
-                    levelMembers,
-                    (RolapMember) parent,
-                    this,
-                    name,
-                    matchType);
+            final Member parent = levelMembers.get(0).getParentMember();
+            return RolapUtil.findBestMemberMatch(levelMembers, (RolapMember) parent, this, name, matchType);
         }
         return null;
     }
 
     private List<MondrianDef.Expression> getInheritedKeyExps() {
-        final List<MondrianDef.Expression> list =
-            new ArrayList<MondrianDef.Expression>();
+        final List<MondrianDef.Expression> list = new ArrayList<MondrianDef.Expression>();
         for (RolapLevel x = this;; x = (RolapLevel) x.getParentLevel()) {
             final MondrianDef.Expression keyExp1 = x.getKeyExp();
             if (keyExp1 != null) {
@@ -591,14 +586,14 @@ public class RolapLevel extends LevelBase {
      */
     public boolean isSimple() {
         // most ragged hierarchies are not simple -- see isTooRagged.
-        if (isTooRagged()) {
+        if (this.isTooRagged()) {
             return false;
         }
-        if (isParentChild()) {
+        if (this.isParentChild()) {
             return false;
         }
         // does not work for measures
-        if (isMeasure()) {
+        if (this.isMeasure()) {
             return false;
         }
         return true;
@@ -623,37 +618,33 @@ public class RolapLevel extends LevelBase {
     private boolean isTooRagged() {
         // Is this the special case of raggedness that native evaluation
         // is able to handle?
-        if (getDepth() == getHierarchy().getLevels().length - 1) {
-            switch (getHideMemberCondition()) {
-            case Never:
-            case IfBlankName:
-                return false;
-            default:
-                return true;
+        if (this.getDepth() == (this.getHierarchy().getLevels().length - 1)) {
+            switch (this.getHideMemberCondition()) {
+                case Never:
+                case IfBlankName:
+                    return false;
+                default:
+                    return true;
             }
         }
         // Handle the general case in the traditional way.
-        return getHierarchy().isRagged();
+        return this.getHierarchy().isRagged();
     }
-
 
     /**
      * Returns true when the level is part of a parent/child hierarchy and has
      * an equivalent closed level.
      */
     boolean hasClosedPeer() {
-        return closedPeerLevel != null;
+        return this.closedPeerLevel != null;
     }
 
     public RolapLevel getClosedPeer() {
-        return closedPeerLevel;
+        return this.closedPeerLevel;
     }
 
-    public static RolapLevel lookupLevel(
-        RolapLevel[] levels,
-        String levelName)
-    {
-        for (RolapLevel level : levels) {
+    public static RolapLevel lookupLevel(RolapLevel[] levels, String levelName) {
+        for (final RolapLevel level : levels) {
             if (level.getName().equals(levelName)) {
                 return level;
             }

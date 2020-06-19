@@ -10,24 +10,51 @@
 */
 package mondrian.olap;
 
-import mondrian.calc.*;
-import mondrian.mdx.*;
-import mondrian.olap.fun.ParameterFunDef;
-import mondrian.olap.type.*;
-import mondrian.resource.MondrianResource;
-import mondrian.rolap.*;
-import mondrian.server.*;
-import mondrian.spi.ProfileHandler;
-import mondrian.util.ArrayStack;
-
-import org.apache.commons.collections.collection.CompositeCollection;
-
-import org.olap4j.impl.*;
-import org.olap4j.mdx.IdentifierSegment;
-
 import java.io.PrintWriter;
 import java.sql.SQLException;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+
+import org.apache.commons.collections.collection.CompositeCollection;
+import org.olap4j.impl.IdentifierParser;
+import org.olap4j.mdx.IdentifierSegment;
+
+import mondrian.calc.Calc;
+import mondrian.calc.CalcWriter;
+import mondrian.calc.ExpCompiler;
+import mondrian.calc.ResultStyle;
+import mondrian.mdx.MdxVisitor;
+import mondrian.mdx.MdxVisitorImpl;
+import mondrian.mdx.MemberExpr;
+import mondrian.mdx.NamedSetExpr;
+import mondrian.mdx.ParameterExpr;
+import mondrian.mdx.ResolvedFunCall;
+import mondrian.mdx.UnresolvedFunCall;
+import mondrian.olap.fun.ParameterFunDef;
+import mondrian.olap.type.MemberType;
+import mondrian.olap.type.SetType;
+import mondrian.olap.type.StringType;
+import mondrian.olap.type.TupleType;
+import mondrian.olap.type.Type;
+import mondrian.olap.type.TypeUtil;
+import mondrian.resource.MondrianResource;
+import mondrian.rolap.RolapConnectionProperties;
+import mondrian.rolap.RolapCube;
+import mondrian.rolap.RolapEvaluator;
+import mondrian.rolap.RolapUtil;
+import mondrian.server.Execution;
+import mondrian.server.Locus;
+import mondrian.server.Statement;
+import mondrian.spi.ProfileHandler;
+import mondrian.util.ArrayStack;
 
 /**
  * <code>Query</code> is an MDX query.
@@ -78,8 +105,7 @@ public class Query extends QueryPart {
      */
     private final List<Parameter> parameters = new ArrayList<Parameter>();
 
-    private final Map<String, Parameter> parametersByName =
-        new HashMap<String, Parameter>();
+    private final Map<String, Parameter> parametersByName = new HashMap<String, Parameter>();
 
     /**
      * Cell properties. Not currently used.
@@ -106,7 +132,7 @@ public class Query extends QueryPart {
      * Will be used to determine if cross joins can be processed natively
      * for virtual cubes.
      */
-    private Set<Member> measuresMembers;
+    private final Set<Member> measuresMembers;
 
     /**
      * If true, virtual cubes can be processed using native cross joins.
@@ -123,7 +149,7 @@ public class Query extends QueryPart {
     /**
      * If true, enforce validation even when ignoreInvalidMembers is set.
      */
-    private boolean strictValidation;
+    private final boolean strictValidation;
 
     /**
      * How should the query be returned? Valid values are:
@@ -132,61 +158,37 @@ public class Query extends QueryPart {
      *    ResultStyle.MUTABLE_LIST
      * For java4, use LIST
      */
-    private ResultStyle resultStyle =
-        Util.Retrowoven ? ResultStyle.LIST : ResultStyle.ITERABLE;
+    private ResultStyle resultStyle = Util.Retrowoven ? ResultStyle.LIST : ResultStyle.ITERABLE;
 
-    private Map<String, Object> evalCache = new HashMap<String, Object>();
+    private final Map<String, Object> evalCache = new HashMap<String, Object>();
 
     /**
      * List of aliased expressions defined in this query, and where they are
      * defined. There might be more than one aliased expression with the same
      * name.
      */
-    private final List<ScopedNamedSet> scopedNamedSets =
-        new ArrayList<ScopedNamedSet>();
+    private final List<ScopedNamedSet> scopedNamedSets = new ArrayList<ScopedNamedSet>();
     private boolean ownStatement;
 
     /**
      * Creates a Query.
      */
-    public Query(
-        Statement statement,
-        Formula[] formulas,
-        QueryAxis[] axes,
-        String cube,
-        QueryAxis slicerAxis,
-        QueryPart[] cellProps,
-        boolean strictValidation)
-    {
-        this(
-            statement,
-            Util.lookupCube(statement.getSchemaReader(), cube, true),
-            formulas,
-            axes,
-            slicerAxis,
-            cellProps,
-            new Parameter[0],
+    public Query(Statement statement, Formula[] formulas, QueryAxis[] axes, String cube, QueryAxis slicerAxis, QueryPart[] cellProps,
+        boolean strictValidation) {
+        this(statement, Util.lookupCube(statement.getSchemaReader(), cube, true), formulas, axes, slicerAxis, cellProps, new Parameter[0],
             strictValidation);
     }
 
     /**
      * Creates a Query.
      */
-    public Query(
-        Statement statement,
-        Cube mdxCube,
-        Formula[] formulas,
-        QueryAxis[] axes,
-        QueryAxis slicerAxis,
-        QueryPart[] cellProps,
-        Parameter[] parameters,
-        boolean strictValidation)
-    {
+    public Query(Statement statement, Cube mdxCube, Formula[] formulas, QueryAxis[] axes, QueryAxis slicerAxis, QueryPart[] cellProps,
+        Parameter[] parameters, boolean strictValidation) {
         this.statement = statement;
         this.cube = mdxCube;
         this.formulas = formulas;
         this.axes = axes;
-        normalizeAxes();
+        this.normalizeAxes();
         this.slicerAxis = slicerAxis;
         this.cellProps = cellProps;
         this.parameters.addAll(Arrays.asList(parameters));
@@ -197,21 +199,18 @@ public class Query extends QueryPart {
         this.strictValidation = strictValidation;
         this.alertedNonNativeFunDefs = new HashSet<FunDef>();
         statement.setQuery(this);
-        resolve();
+        this.resolve();
 
-        if (RolapUtil.PROFILE_LOGGER.isDebugEnabled()
-            && statement.getProfileHandler() == null)
-        {
-            statement.enableProfiling(
-                new ProfileHandler() {
-                    public void explain(String plan, QueryTiming timing) {
-                        if (timing != null) {
-                            plan += "\n" + timing;
-                        }
-                        RolapUtil.PROFILE_LOGGER.debug(plan);
+        if (RolapUtil.PROFILE_LOGGER.isDebugEnabled() && (statement.getProfileHandler() == null)) {
+            statement.enableProfiling(new ProfileHandler() {
+                @Override
+                public void explain(String plan, QueryTiming timing) {
+                    if (timing != null) {
+                        plan += "\n" + timing;
                     }
+                    RolapUtil.PROFILE_LOGGER.debug(plan);
                 }
-            );
+            });
         }
     }
 
@@ -224,16 +223,17 @@ public class Query extends QueryPart {
      *
      * @deprecated This method will be removed in mondrian-4.0
      */
+    @Deprecated
     public void setQueryTimeoutMillis(long queryTimeoutMillis) {
-        statement.setQueryTimeoutMillis(queryTimeoutMillis);
+        this.statement.setQueryTimeoutMillis(queryTimeoutMillis);
     }
 
     /**
      * Checks whether the property name is present in the query.
      */
     public boolean hasCellProperty(String propertyName) {
-        for (QueryPart cellProp : cellProps) {
-            if (((CellProperty)cellProp).isNameEquals(propertyName)) {
+        for (final QueryPart cellProp : this.cellProps) {
+            if (((CellProperty) cellProp).isNameEquals(propertyName)) {
                 return true;
             }
         }
@@ -244,7 +244,7 @@ public class Query extends QueryPart {
      * Checks whether any cell property present in the query
      */
     public boolean isCellPropertyEmpty() {
-        return cellProps.length == 0;
+        return this.cellProps.length == 0;
     }
 
     /**
@@ -252,8 +252,7 @@ public class Query extends QueryPart {
      * to an existing query.
      */
     public void addFormula(Id id, Exp exp) {
-        addFormula(
-            new Formula(false, id, exp, new MemberProperty[0], null, null));
+        this.addFormula(new Formula(false, id, exp, new MemberProperty[0], null, null));
     }
 
     /**
@@ -264,12 +263,8 @@ public class Query extends QueryPart {
      * @param exp Expression for member
      * @param memberProperties Properties of member
      */
-    public void addFormula(
-        Id id,
-        Exp exp,
-        MemberProperty[] memberProperties)
-    {
-        addFormula(new Formula(true, id, exp, memberProperties, null, null));
+    public void addFormula(Id id, Exp exp, MemberProperty[] memberProperties) {
+        this.addFormula(new Formula(true, id, exp, memberProperties, null, null));
     }
 
     /**
@@ -280,8 +275,8 @@ public class Query extends QueryPart {
      * @param formula Formula to add to query
      */
     public void addFormula(Formula formula) {
-        formulas = Util.append(formulas, formula);
-        resolve();
+        this.formulas = Util.append(this.formulas, formula);
+        this.resolve();
     }
 
     /**
@@ -293,8 +288,8 @@ public class Query extends QueryPart {
      * @param additions Formulas to add to query
      */
     public void addFormulas(Formula... additions) {
-        formulas = Util.appendArrays(formulas, additions);
-        resolve();
+        this.formulas = Util.appendArrays(this.formulas, additions);
+        this.resolve();
     }
 
     /**
@@ -303,20 +298,11 @@ public class Query extends QueryPart {
      * @return Validator
      */
     public Validator createValidator() {
-        return createValidator(
-            statement.getSchema().getFunTable(),
-            false,
-            new HashMap<QueryPart, QueryPart>());
+        return this.createValidator(this.statement.getSchema().getFunTable(), false, new HashMap<QueryPart, QueryPart>());
     }
 
-
-    public Validator createValidator(
-        Map<QueryPart, QueryPart> resolvedIdentifiers)
-    {
-        return createValidator(
-            statement.getSchema().getFunTable(),
-            false,
-            resolvedIdentifiers);
+    public Validator createValidator(Map<QueryPart, QueryPart> resolvedIdentifiers) {
+        return this.createValidator(this.statement.getSchema().getFunTable(), false, resolvedIdentifiers);
     }
 
     /**
@@ -328,56 +314,33 @@ public class Query extends QueryPart {
      *     definitions (see {@link Validator#alwaysResolveFunDef()})
      * @return Validator
      */
-    public Validator createValidator(
-        FunTable functionTable,
-        boolean alwaysResolveFunDef)
-    {
-        return new QueryValidator(
-            functionTable,
-            alwaysResolveFunDef,
-            Query.this,
-            new HashMap<QueryPart, QueryPart>());
+    public Validator createValidator(FunTable functionTable, boolean alwaysResolveFunDef) {
+        return new QueryValidator(functionTable, alwaysResolveFunDef, Query.this, new HashMap<QueryPart, QueryPart>());
     }
 
-
-    public Validator createValidator(
-        FunTable functionTable,
-        boolean alwaysResolveFunDef,
-        Map<QueryPart, QueryPart> resolvedIdentifiers)
-    {
-        return new QueryValidator(
-            functionTable,
-            alwaysResolveFunDef,
-            Query.this,
-            resolvedIdentifiers);
+    public Validator createValidator(FunTable functionTable, boolean alwaysResolveFunDef, Map<QueryPart, QueryPart> resolvedIdentifiers) {
+        return new QueryValidator(functionTable, alwaysResolveFunDef, Query.this, resolvedIdentifiers);
     }
 
     /**
      * @deprecated Please use {@link #clone}; this method will be removed in
      * mondrian-4.0
      */
+    @Deprecated
     public Query safeClone() {
-        return clone();
+        return this.clone();
     }
 
-    @SuppressWarnings({
-        "CloneDoesntCallSuperClone",
-        "CloneDoesntDeclareCloneNotSupportedException"
-    })
+    @Override
+    @SuppressWarnings({ "CloneDoesntCallSuperClone", "CloneDoesntDeclareCloneNotSupportedException" })
     public Query clone() {
-        return new Query(
-            statement,
-            cube,
-            Formula.cloneArray(formulas),
-            QueryAxis.cloneArray(axes),
-            (slicerAxis == null) ? null : (QueryAxis) slicerAxis.clone(),
-            cellProps,
-            parameters.toArray(new Parameter[parameters.size()]),
-            strictValidation);
+        return new Query(this.statement, this.cube, Formula.cloneArray(this.formulas), QueryAxis.cloneArray(this.axes),
+            (this.slicerAxis == null) ? null : (QueryAxis) this.slicerAxis.clone(), this.cellProps,
+            this.parameters.toArray(new Parameter[this.parameters.size()]), this.strictValidation);
     }
 
     public Connection getConnection() {
-        return statement.getMondrianConnection();
+        return this.statement.getMondrianConnection();
     }
 
     /**
@@ -388,10 +351,11 @@ public class Query extends QueryPart {
      *
      * @deprecated This method is deprecated and will be removed in mondrian-4.0
      */
+    @Deprecated
     public void cancel() {
         try {
-            statement.cancel();
-        } catch (SQLException e) {
+            this.statement.cancel();
+        } catch (final SQLException e) {
             throw new RuntimeException(e);
         }
     }
@@ -406,8 +370,9 @@ public class Query extends QueryPart {
      *
      * @deprecated This method will be removed in mondrian-4.0
      */
+    @Deprecated
     public void checkCancelOrTimeout() {
-        final Execution execution0 = statement.getCurrentExecution();
+        final Execution execution0 = this.statement.getCurrentExecution();
         if (execution0 == null) {
             return;
         }
@@ -421,11 +386,10 @@ public class Query extends QueryPart {
      * @deprecated Use {@link Execution#getStartTime}. This method is deprecated
      *   and will be removed in mondrian-4.0
      */
+    @Deprecated
     public long getQueryStartTime() {
-        final Execution currentExecution = statement.getCurrentExecution();
-        return currentExecution == null
-            ? 0
-            : currentExecution.getStartTime();
+        final Execution currentExecution = this.statement.getCurrentExecution();
+        return currentExecution == null ? 0 : currentExecution.getStartTime();
     }
 
     /**
@@ -437,20 +401,19 @@ public class Query extends QueryPart {
      * @return true if alert should be raised
      */
     public boolean shouldAlertForNonNative(FunDef funDef) {
-        return alertedNonNativeFunDefs.add(funDef);
+        return this.alertedNonNativeFunDefs.add(funDef);
     }
 
     private void normalizeAxes() {
-        for (int i = 0; i < axes.length; i++) {
-            AxisOrdinal correctOrdinal =
-                AxisOrdinal.StandardAxisOrdinal.forLogicalOrdinal(i);
-            if (axes[i].getAxisOrdinal() != correctOrdinal) {
-                for (int j = i + 1; j < axes.length; j++) {
-                    if (axes[j].getAxisOrdinal() == correctOrdinal) {
+        for (int i = 0; i < this.axes.length; i++) {
+            final AxisOrdinal correctOrdinal = AxisOrdinal.StandardAxisOrdinal.forLogicalOrdinal(i);
+            if (this.axes[i].getAxisOrdinal() != correctOrdinal) {
+                for (int j = i + 1; j < this.axes.length; j++) {
+                    if (this.axes[j].getAxisOrdinal() == correctOrdinal) {
                         // swap axes
-                        QueryAxis temp = axes[i];
-                        axes[i] = axes[j];
-                        axes[j] = temp;
+                        final QueryAxis temp = this.axes[i];
+                        this.axes[i] = this.axes[j];
+                        this.axes[j] = temp;
                         break;
                     }
                 }
@@ -469,25 +432,22 @@ public class Query extends QueryPart {
     public void resolve() {
         // Before commencing validation, create all calculated members
         // and calculated sets
-        createFormulaElements();
-        Map<QueryPart, QueryPart> resolvedIdentifiers =
-            new IdBatchResolver(this).resolve();
-        final Validator validator = createValidator(resolvedIdentifiers);
-        resolve(validator); // resolve self and children
+        this.createFormulaElements();
+        final Map<QueryPart, QueryPart> resolvedIdentifiers = new IdBatchResolver(this).resolve();
+        final Validator validator = this.createValidator(resolvedIdentifiers);
+        this.resolve(validator); // resolve self and children
         // Create a dummy result so we can use its evaluator
-        final Evaluator evaluator = RolapUtil.createEvaluator(statement);
-        ExpCompiler compiler =
-            createCompiler(
-                evaluator, validator, Collections.singletonList(resultStyle));
-        compile(compiler);
+        final Evaluator evaluator = RolapUtil.createEvaluator(this.statement);
+        final ExpCompiler compiler = this.createCompiler(evaluator, validator, Collections.singletonList(this.resultStyle));
+        this.compile(compiler);
     }
 
     private void createFormulaElements() {
-        if (formulas != null) {
+        if (this.formulas != null) {
             // Resolving of formulas should be done in two parts
             // because formulas might depend on each other, so all calculated
             // mdx elements have to be defined during resolve.
-            for (Formula formula : formulas) {
+            for (final Formula formula : this.formulas) {
                 formula.createElement(this);
             }
         }
@@ -499,15 +459,10 @@ public class Query extends QueryPart {
      * checked depending on whether environment is schema load vs query
      * validation)
      */
-    public boolean ignoreInvalidMembers()
-    {
-        MondrianProperties props = MondrianProperties.instance();
-        final boolean load = ((RolapCube) getCube()).isLoadInProgress();
-        return
-            !strictValidation
-            && (load
-                ? props.IgnoreInvalidMembers.get()
-                : props.IgnoreInvalidMembersDuringQuery.get());
+    public boolean ignoreInvalidMembers() {
+        final MondrianProperties props = MondrianProperties.instance();
+        final boolean load = ((RolapCube) this.getCube()).isLoadInProgress();
+        return !this.strictValidation && (load ? props.IgnoreInvalidMembers.get() : props.IgnoreInvalidMembersDuringQuery.get());
     }
 
     /**
@@ -518,24 +473,21 @@ public class Query extends QueryPart {
      */
     public void setResultStyle(ResultStyle resultStyle) {
         switch (resultStyle) {
-        case ITERABLE:
-            // For java4, use LIST
-            this.resultStyle = (Util.Retrowoven)
-                ? ResultStyle.LIST : ResultStyle.ITERABLE;
-            break;
-        case LIST:
-        case MUTABLE_LIST:
-            this.resultStyle = resultStyle;
-            break;
-        default:
-            throw ResultStyleException.generateBadType(
-                ResultStyle.ITERABLE_LIST_MUTABLELIST,
-                resultStyle);
+            case ITERABLE:
+                // For java4, use LIST
+                this.resultStyle = (Util.Retrowoven) ? ResultStyle.LIST : ResultStyle.ITERABLE;
+                break;
+            case LIST:
+            case MUTABLE_LIST:
+                this.resultStyle = resultStyle;
+                break;
+            default:
+                throw ResultStyleException.generateBadType(ResultStyle.ITERABLE_LIST_MUTABLELIST, resultStyle);
         }
     }
 
     public ResultStyle getResultStyle() {
-        return resultStyle;
+        return this.resultStyle;
     }
 
     /**
@@ -544,20 +496,20 @@ public class Query extends QueryPart {
      * @param compiler Compiler
      */
     private void compile(ExpCompiler compiler) {
-        if (formulas != null) {
-            for (Formula formula : formulas) {
+        if (this.formulas != null) {
+            for (final Formula formula : this.formulas) {
                 formula.compile();
             }
         }
 
-        if (axes != null) {
-            axisCalcs = new Calc[axes.length];
-            for (int i = 0; i < axes.length; i++) {
-                axisCalcs[i] = axes[i].compile(compiler, resultStyle);
+        if (this.axes != null) {
+            this.axisCalcs = new Calc[this.axes.length];
+            for (int i = 0; i < this.axes.length; i++) {
+                this.axisCalcs[i] = this.axes[i].compile(compiler, this.resultStyle);
             }
         }
-        if (slicerAxis != null) {
-            slicerCalc = slicerAxis.compile(compiler, resultStyle);
+        if (this.slicerAxis != null) {
+            this.slicerCalc = this.slicerAxis.compile(compiler, this.resultStyle);
         }
     }
 
@@ -568,83 +520,76 @@ public class Query extends QueryPart {
      */
     public void resolve(Validator validator) {
         // Register all parameters.
-        parameters.clear();
-        parametersByName.clear();
-        accept(new ParameterFinder());
+        this.parameters.clear();
+        this.parametersByName.clear();
+        this.accept(new ParameterFinder());
 
         // Register all aliased expressions ('expr AS alias') as named sets.
-        accept(new AliasedExpressionFinder());
+        this.accept(new AliasedExpressionFinder());
 
         // Validate formulas.
-        if (formulas != null) {
-            for (Formula formula : formulas) {
+        if (this.formulas != null) {
+            for (final Formula formula : this.formulas) {
                 validator.validate(formula);
             }
         }
 
         // Validate axes.
-        if (axes != null) {
-            Set<Integer> axisNames = new HashSet<Integer>();
-            for (QueryAxis axis : axes) {
+        if (this.axes != null) {
+            final Set<Integer> axisNames = new HashSet<Integer>();
+            for (final QueryAxis axis : this.axes) {
                 validator.validate(axis);
                 if (!axisNames.add(axis.getAxisOrdinal().logicalOrdinal())) {
-                    throw MondrianResource.instance().DuplicateAxis.ex(
-                        axis.getAxisName());
+                    throw MondrianResource.instance().DuplicateAxis.ex(axis.getAxisName());
                 }
             }
 
             // Make sure that there are no gaps. If there are N axes, then axes
             // 0 .. N-1 should exist.
-            int seekOrdinal =
-                AxisOrdinal.StandardAxisOrdinal.COLUMNS.logicalOrdinal();
-            for (QueryAxis axis : axes) {
+            int seekOrdinal = AxisOrdinal.StandardAxisOrdinal.COLUMNS.logicalOrdinal();
+            for (final QueryAxis axis : this.axes) {
                 if (!axisNames.contains(seekOrdinal)) {
-                    AxisOrdinal axisName =
-                        AxisOrdinal.StandardAxisOrdinal.forLogicalOrdinal(
-                            seekOrdinal);
-                    throw MondrianResource.instance().NonContiguousAxis.ex(
-                        seekOrdinal,
-                        axisName.name());
+                    final AxisOrdinal axisName = AxisOrdinal.StandardAxisOrdinal.forLogicalOrdinal(seekOrdinal);
+                    throw MondrianResource.instance().NonContiguousAxis.ex(seekOrdinal, axisName.name());
                 }
                 ++seekOrdinal;
             }
         }
-        if (slicerAxis != null) {
-            slicerAxis.validate(validator);
+        if (this.slicerAxis != null) {
+            this.slicerAxis.validate(validator);
         }
 
         // Make sure that no hierarchy is used on more than one axis.
-        for (Hierarchy hierarchy : ((RolapCube) getCube()).getHierarchies()) {
+        for (final Hierarchy hierarchy : ((RolapCube) this.getCube()).getHierarchies()) {
             int useCount = 0;
-            for (QueryAxis axis : allAxes()) {
+            for (final QueryAxis axis : this.allAxes()) {
                 if (axis.getSet().getType().usesHierarchy(hierarchy, true)) {
                     ++useCount;
                 }
             }
             if (useCount > 1) {
-                throw MondrianResource.instance().HierarchyInIndependentAxes.ex(
-                    hierarchy.getUniqueName());
+                throw MondrianResource.instance().HierarchyInIndependentAxes.ex(hierarchy.getUniqueName());
             }
         }
     }
 
     @Override
     public void explain(PrintWriter pw) {
-        final boolean profiling = getStatement().getProfileHandler() != null;
+        final boolean profiling = this.getStatement().getProfileHandler() != null;
         final CalcWriter calcWriter = new CalcWriter(pw, profiling);
-        for (Formula formula : formulas) {
+        for (final Formula formula : this.formulas) {
             formula.getMdxMember(); // TODO:
         }
-        if (slicerCalc != null) {
+        if (this.slicerCalc != null) {
             pw.println("Axis (FILTER):");
-            slicerCalc.accept(calcWriter);
+            this.slicerCalc.accept(calcWriter);
             pw.println();
         }
         int i = -1;
-        for (QueryAxis axis : axes) {
+        for (final QueryAxis axis : this.axes) {
             ++i;
             pw.println("Axis (" + axis.getAxisName() + "):");
-            axisCalcs[i].accept(calcWriter);
+            this.axisCalcs[i].accept(calcWriter);
             pw.println();
         }
         pw.flush();
@@ -657,34 +602,32 @@ public class Query extends QueryPart {
      * @return Collection of all axes including slicer
      */
     private Collection<QueryAxis> allAxes() {
-        if (slicerAxis == null) {
-            return Arrays.asList(axes);
+        if (this.slicerAxis == null) {
+            return Arrays.asList(this.axes);
         } else {
             //noinspection unchecked
-            return new CompositeCollection(
-                new Collection[] {
-                    Collections.singletonList(slicerAxis),
-                    Arrays.asList(axes)});
+            return new CompositeCollection(new Collection[] { Collections.singletonList(this.slicerAxis), Arrays.asList(this.axes) });
         }
     }
 
+    @Override
     public void unparse(PrintWriter pw) {
-        if (formulas != null) {
-            for (int i = 0; i < formulas.length; i++) {
+        if (this.formulas != null) {
+            for (int i = 0; i < this.formulas.length; i++) {
                 if (i == 0) {
                     pw.print("with ");
                 } else {
                     pw.print("  ");
                 }
-                formulas[i].unparse(pw);
+                this.formulas[i].unparse(pw);
                 pw.println();
             }
         }
         pw.print("select ");
-        if (axes != null) {
-            for (int i = 0; i < axes.length; i++) {
-                axes[i].unparse(pw);
-                if (i < axes.length - 1) {
+        if (this.axes != null) {
+            for (int i = 0; i < this.axes.length; i++) {
+                this.axes[i].unparse(pw);
+                if (i < (this.axes.length - 1)) {
                     pw.println(",");
                     pw.print("  ");
                 } else {
@@ -692,36 +635,38 @@ public class Query extends QueryPart {
                 }
             }
         }
-        if (cube != null) {
-            pw.println("from [" + cube.getName() + "]");
+        if (this.cube != null) {
+            pw.println("from [" + this.cube.getName() + "]");
         }
-        if (slicerAxis != null) {
+        if (this.slicerAxis != null) {
             pw.print("where ");
-            slicerAxis.unparse(pw);
+            this.slicerAxis.unparse(pw);
             pw.println();
         }
     }
 
     /** Returns the MDX query string. */
+    @Override
     public String toString() {
-        resolve();
+        this.resolve();
         return Util.unparse(this);
     }
 
+    @Override
     public Object[] getChildren() {
         // Chidren are axes, slicer, and formulas (in that order, to be
         // consistent with replaceChild).
-        List<QueryPart> list = new ArrayList<QueryPart>();
-        list.addAll(Arrays.asList(axes));
-        if (slicerAxis != null) {
-            list.add(slicerAxis);
+        final List<QueryPart> list = new ArrayList<QueryPart>();
+        list.addAll(Arrays.asList(this.axes));
+        if (this.slicerAxis != null) {
+            list.add(this.slicerAxis);
         }
-        list.addAll(Arrays.asList(formulas));
+        list.addAll(Arrays.asList(this.formulas));
         return list.toArray();
     }
 
     public QueryAxis getSlicerAxis() {
-        return slicerAxis;
+        return this.slicerAxis;
     }
 
     public void setSlicerAxis(QueryAxis axis) {
@@ -733,7 +678,7 @@ public class Query extends QueryPart {
      */
     public void addLevelToAxis(AxisOrdinal axis, Level level) {
         assert axis != null;
-        axes[axis.logicalOrdinal()].addLevel(level);
+        this.axes[axis.logicalOrdinal()].addLevel(level);
     }
 
     /**
@@ -762,17 +707,17 @@ public class Query extends QueryPart {
         }
         if (exprType instanceof TupleType) {
             final Type[] types = ((TupleType) exprType).elementTypes;
-            ArrayList<Hierarchy> hierarchyList = new ArrayList<Hierarchy>();
-            for (Type type : types) {
-                hierarchyList.add(getTypeHierarchy(type));
+            final ArrayList<Hierarchy> hierarchyList = new ArrayList<Hierarchy>();
+            for (final Type type : types) {
+                hierarchyList.add(this.getTypeHierarchy(type));
             }
             return hierarchyList.toArray(new Hierarchy[hierarchyList.size()]);
         }
-        return new Hierarchy[] {getTypeHierarchy(exprType)};
+        return new Hierarchy[] { this.getTypeHierarchy(exprType) };
     }
 
     private Hierarchy getTypeHierarchy(final Type type) {
-        Hierarchy hierarchy = type.getHierarchy();
+        final Hierarchy hierarchy = type.getHierarchy();
         if (hierarchy != null) {
             return hierarchy;
         }
@@ -792,31 +737,23 @@ public class Query extends QueryPart {
         // Need to resolve query before we set parameters, in order to create
         // slots to store them in. (This code will go away when parameters
         // belong to prepared statements.)
-        if (parameters.isEmpty()) {
-            resolve();
+        if (this.parameters.isEmpty()) {
+            this.resolve();
         }
 
-        final Parameter param =
-            getSchemaReader(false).getParameter(parameterName);
+        final Parameter param = this.getSchemaReader(false).getParameter(parameterName);
         if (param == null) {
-            throw MondrianResource.instance().UnknownParameter.ex(
-                parameterName);
+            throw MondrianResource.instance().UnknownParameter.ex(parameterName);
         }
         if (!param.isModifiable()) {
-            throw MondrianResource.instance().ParameterIsNotModifiable.ex(
-                parameterName, param.getScope().name());
+            throw MondrianResource.instance().ParameterIsNotModifiable.ex(parameterName, param.getScope().name());
         }
-        final Object value2 =
-        Locus.execute(
-            new Execution(statement, 0),
-            "Query.quickParse",
-            new Locus.Action<Object>() {
-                public Object execute() {
-                    return quickParse(
-                        parameterName, param.getType(), value, Query.this);
-                }
+        final Object value2 = Locus.execute(new Execution(this.statement, 0), "Query.quickParse", new Locus.Action<Object>() {
+            @Override
+            public Object execute() {
+                return quickParse(parameterName, param.getType(), value, Query.this);
             }
-        );
+        });
         param.setValue(value2);
     }
 
@@ -839,105 +776,87 @@ public class Query extends QueryPart {
      * @return Value of appropriate type
      * @throws NumberFormatException If value needs to be a number but isn't
      */
-    private static Object quickParse(
-        String parameterName,
-        Type type,
-        Object value,
-        Query query)
-        throws NumberFormatException
-    {
-        int category = TypeUtil.typeToCategory(type);
+    private static Object quickParse(String parameterName, Type type, Object value, Query query)
+        throws NumberFormatException {
+        final int category = TypeUtil.typeToCategory(type);
         switch (category) {
-        case Category.Numeric:
-            if (value instanceof Number || value == null) {
-                return value;
-            }
-            if (value instanceof String) {
-                String s = (String) value;
-                try {
-                    return new Integer(s);
-                } catch (NumberFormatException e) {
-                    return new Double(s);
-                }
-            }
-            throw Util.newInternal(
-                "Invalid value '" + value + "' for parameter '" + parameterName
-                + "', type " + type);
-        case Category.String:
-            if (value == null) {
-                return null;
-            }
-            return value.toString();
-        case Category.Set:
-            if (value instanceof String) {
-                value = IdentifierParser.parseIdentifierList((String) value);
-            }
-            if (!(value instanceof List)) {
-                throw Util.newInternal(
-                    "Invalid value '" + value + "' for parameter '"
-                    + parameterName + "', type " + type);
-            }
-            List<Member> expList = new ArrayList<Member>();
-            final List list = (List) value;
-            final SetType setType = (SetType) type;
-            final Type elementType = setType.getElementType();
-            for (Object o : list) {
-                // In keeping with MDX semantics, null members are omitted from
-                // lists.
-                if (o == null) {
-                    continue;
-                }
-                final Member member =
-                    (Member) quickParse(parameterName, elementType, o, query);
-                expList.add(member);
-            }
-            return expList;
-        case Category.Member:
-            if (value == null) {
-                // Setting a member parameter to null is the same as setting to
-                // the null member of the hierarchy. May not be equivalent to
-                // the default value of the parameter, nor the same as the all
-                // member.
-                if (type.getHierarchy() != null) {
-                    value = type.getHierarchy().getNullMember();
-                } else if (type.getDimension() != null) {
-                    value = type.getDimension().getHierarchy().getNullMember();
-                }
-            }
-            if (value instanceof String) {
-                value = Util.parseIdentifier((String) value);
-            }
-            if (value instanceof List
-                && Util.canCast((List) value, Id.Segment.class))
-            {
-                final List<Id.Segment> segmentList = Util.cast((List) value);
-                final OlapElement olapElement = Util.lookup(query, segmentList);
-                if (olapElement instanceof Member) {
-                    value = olapElement;
-                }
-            }
-            if (value instanceof List
-                && Util.canCast((List) value, IdentifierSegment.class))
-            {
-                final List<IdentifierSegment> olap4jSegmentList =
-                    Util.cast((List) value);
-                final List<Id.Segment> segmentList =
-                    Util.convert(olap4jSegmentList);
-                final OlapElement olapElement = Util.lookup(query, segmentList);
-                if (olapElement instanceof Member) {
-                    value = olapElement;
-                }
-            }
-            if (value instanceof Member) {
-                if (type.isInstance(value)) {
+            case Category.Numeric:
+                if ((value instanceof Number) || (value == null)) {
                     return value;
                 }
-            }
-            throw Util.newInternal(
-                "Invalid value '" + value + "' for parameter '"
-                + parameterName + "', type " + type);
-        default:
-            throw Category.instance.badValue(category);
+                if (value instanceof String) {
+                    final String s = (String) value;
+                    try {
+                        return new Integer(s);
+                    } catch (final NumberFormatException e) {
+                        return new Double(s);
+                    }
+                }
+                throw Util.newInternal("Invalid value '" + value + "' for parameter '" + parameterName + "', type " + type);
+            case Category.String:
+                if (value == null) {
+                    return null;
+                }
+                return value.toString();
+            case Category.Set:
+                if (value instanceof String) {
+                    value = IdentifierParser.parseIdentifierList((String) value);
+                }
+                if (!(value instanceof List)) {
+                    throw Util.newInternal("Invalid value '" + value + "' for parameter '" + parameterName + "', type " + type);
+                }
+                final List<Member> expList = new ArrayList<Member>();
+                final List list = (List) value;
+                final SetType setType = (SetType) type;
+                final Type elementType = setType.getElementType();
+                for (final Object o : list) {
+                    // In keeping with MDX semantics, null members are omitted from
+                    // lists.
+                    if (o == null) {
+                        continue;
+                    }
+                    final Member member = (Member) quickParse(parameterName, elementType, o, query);
+                    expList.add(member);
+                }
+                return expList;
+            case Category.Member:
+                if (value == null) {
+                    // Setting a member parameter to null is the same as setting to
+                    // the null member of the hierarchy. May not be equivalent to
+                    // the default value of the parameter, nor the same as the all
+                    // member.
+                    if (type.getHierarchy() != null) {
+                        value = type.getHierarchy().getNullMember();
+                    } else if (type.getDimension() != null) {
+                        value = type.getDimension().getHierarchy().getNullMember();
+                    }
+                }
+                if (value instanceof String) {
+                    value = Util.parseIdentifier((String) value);
+                }
+                if ((value instanceof List) && Util.canCast((List) value, Id.Segment.class)) {
+                    final List<Id.Segment> segmentList = Util.cast((List) value);
+                    final OlapElement olapElement = Util.lookup(query, segmentList);
+                    if (olapElement instanceof Member) {
+                        value = olapElement;
+                    }
+                }
+                if ((value instanceof List) && Util.canCast((List) value, IdentifierSegment.class)) {
+                    final List<IdentifierSegment> olap4jSegmentList = Util.cast((List) value);
+                    final List<Id.Segment> segmentList = Util.convert(olap4jSegmentList);
+                    final OlapElement olapElement = Util.lookup(query, segmentList);
+                    if (olapElement instanceof Member) {
+                        value = olapElement;
+                    }
+                }
+                if (value instanceof Member) {
+                    if (type.isInstance(value)) {
+                        return value;
+                    }
+                }
+                throw Util.newInternal("Invalid value '" + value + "' for parameter '" + parameterName + "', type " + type);
+            default:
+                throw Category.instance.badValue(category);
         }
     }
 
@@ -946,15 +865,15 @@ public class Query extends QueryPart {
      * Does nothing if the number of axes != 2.
      */
     public void swapAxes() {
-        if (axes.length == 2) {
-            Exp e0 = axes[0].getSet();
-            boolean nonEmpty0 = axes[0].isNonEmpty();
-            Exp e1 = axes[1].getSet();
-            boolean nonEmpty1 = axes[1].isNonEmpty();
-            axes[1].setSet(e0);
-            axes[1].setNonEmpty(nonEmpty0);
-            axes[0].setSet(e1);
-            axes[0].setNonEmpty(nonEmpty1);
+        if (this.axes.length == 2) {
+            final Exp e0 = this.axes[0].getSet();
+            final boolean nonEmpty0 = this.axes[0].isNonEmpty();
+            final Exp e1 = this.axes[1].getSet();
+            final boolean nonEmpty1 = this.axes[1].isNonEmpty();
+            this.axes[1].setSet(e0);
+            this.axes[1].setNonEmpty(nonEmpty0);
+            this.axes[0].setSet(e1);
+            this.axes[0].setNonEmpty(nonEmpty1);
             // showSubtotals ???
         }
     }
@@ -963,11 +882,11 @@ public class Query extends QueryPart {
      * Returns the parameters defined in this query.
      */
     public Parameter[] getParameters() {
-        return parameters.toArray(new Parameter[parameters.size()]);
+        return this.parameters.toArray(new Parameter[this.parameters.size()]);
     }
 
     public Cube getCube() {
-        return cube;
+        return this.cube;
     }
 
     /**
@@ -982,11 +901,11 @@ public class Query extends QueryPart {
         final Role role;
         if (accessControlled) {
             // full access control
-            role = getConnection().getRole();
+            role = this.getConnection().getRole();
         } else {
             role = null;
         }
-        final SchemaReader cubeSchemaReader = cube.getSchemaReader(role);
+        final SchemaReader cubeSchemaReader = this.cube.getSchemaReader(role);
         return new QuerySchemaReader(cubeSchemaReader, Query.this);
     }
 
@@ -996,12 +915,9 @@ public class Query extends QueryPart {
      */
     public Member lookupMemberFromCache(String memberUniqueName) {
         // first look in defined members
-        for (Member member : getDefinedMembers()) {
+        for (final Member member : this.getDefinedMembers()) {
             if (Util.equalName(member.getUniqueName(), memberUniqueName)
-                || Util.equalName(
-                    getUniqueNameWithoutAll(member),
-                    memberUniqueName))
-            {
+                || Util.equalName(this.getUniqueNameWithoutAll(member), memberUniqueName)) {
                 return member;
             }
         }
@@ -1010,11 +926,9 @@ public class Query extends QueryPart {
 
     private String getUniqueNameWithoutAll(Member member) {
         // build unique string
-        Member parentMember = member.getParentMember();
+        final Member parentMember = member.getParentMember();
         if ((parentMember != null) && !parentMember.isAll()) {
-            return Util.makeFqName(
-                getUniqueNameWithoutAll(parentMember),
-                member.getName());
+            return Util.makeFqName(this.getUniqueNameWithoutAll(parentMember), member.getName());
         } else {
             return Util.makeFqName(member.getHierarchy(), member.getName());
         }
@@ -1027,12 +941,9 @@ public class Query extends QueryPart {
         if (!(segment instanceof Id.NameSegment)) {
             return null;
         }
-        Id.NameSegment nameSegment = (Id.NameSegment) segment;
-        for (Formula formula : formulas) {
-            if (!formula.isMember()
-                && formula.getElement() != null
-                && formula.getName().equals(nameSegment.getName()))
-            {
+        final Id.NameSegment nameSegment = (Id.NameSegment) segment;
+        for (final Formula formula : this.formulas) {
+            if (!formula.isMember() && (formula.getElement() != null) && formula.getName().equals(nameSegment.getName())) {
                 return (NamedSet) formula.getElement();
             }
         }
@@ -1042,15 +953,9 @@ public class Query extends QueryPart {
     /**
      * Creates a named set defined by an alias.
      */
-    public ScopedNamedSet createScopedNamedSet(
-        String name,
-        QueryPart scope,
-        Exp expr)
-    {
-        final ScopedNamedSet scopedNamedSet =
-            new ScopedNamedSet(
-                name, scope, expr);
-        scopedNamedSets.add(scopedNamedSet);
+    public ScopedNamedSet createScopedNamedSet(String name, QueryPart scope, Exp expr) {
+        final ScopedNamedSet scopedNamedSet = new ScopedNamedSet(name, scope, expr);
+        this.scopedNamedSets.add(scopedNamedSet);
         return scopedNamedSet;
     }
 
@@ -1060,22 +965,19 @@ public class Query extends QueryPart {
      * @param nameParts Multi-part identifier for set
      * @param scopeList Parse tree node where name is used (last in list) and
      */
-    ScopedNamedSet lookupScopedNamedSet(
-        List<Id.Segment> nameParts,
-        ArrayStack<QueryPart> scopeList)
-    {
+    ScopedNamedSet lookupScopedNamedSet(List<Id.Segment> nameParts, ArrayStack<QueryPart> scopeList) {
         if (nameParts.size() != 1) {
             return null;
         }
         if (!(nameParts.get(0) instanceof Id.NameSegment)) {
             return null;
         }
-        String name = ((Id.NameSegment) nameParts.get(0)).getName();
+        final String name = ((Id.NameSegment) nameParts.get(0)).getName();
         ScopedNamedSet bestScopedNamedSet = null;
         int bestScopeOrdinal = -1;
-        for (ScopedNamedSet scopedNamedSet : scopedNamedSets) {
+        for (final ScopedNamedSet scopedNamedSet : this.scopedNamedSets) {
             if (Util.equalName(scopedNamedSet.name, name)) {
-                int scopeOrdinal = scopeList.indexOf(scopedNamedSet.scope);
+                final int scopeOrdinal = scopeList.indexOf(scopedNamedSet.scope);
                 if (scopeOrdinal > bestScopeOrdinal) {
                     bestScopedNamedSet = scopedNamedSet;
                     bestScopeOrdinal = scopeOrdinal;
@@ -1089,14 +991,14 @@ public class Query extends QueryPart {
      * Returns an array of the formulas used in this query.
      */
     public Formula[] getFormulas() {
-        return formulas;
+        return this.formulas;
     }
 
     /**
      * Returns an array of this query's axes.
      */
     public QueryAxis[] getAxes() {
-        return axes;
+        return this.axes;
     }
 
     /**
@@ -1105,21 +1007,20 @@ public class Query extends QueryPart {
      * query.
      */
     public void removeFormula(String uniqueName, boolean failIfUsedInQuery) {
-        Formula formula = findFormula(uniqueName);
-        if (failIfUsedInQuery && formula != null) {
-            OlapElement mdxElement = formula.getElement();
+        final Formula formula = this.findFormula(uniqueName);
+        if (failIfUsedInQuery && (formula != null)) {
+            final OlapElement mdxElement = formula.getElement();
             // search the query tree to see if this formula expression is used
             // anywhere (on the axes or in another formula)
-            Walker walker = new Walker(this);
+            final Walker walker = new Walker(this);
             while (walker.hasMoreElements()) {
-                Object queryElement = walker.nextElement();
+                final Object queryElement = walker.nextElement();
                 if (!queryElement.equals(mdxElement)) {
                     continue;
                 }
                 // mdxElement is used in the query. lets find on on which axis
                 // or formula
-                String formulaType = formula.isMember()
-                    ? MondrianResource.instance().CalculatedMember.str()
+                final String formulaType = formula.isMember() ? MondrianResource.instance().CalculatedMember.str()
                     : MondrianResource.instance().CalculatedSet.str();
 
                 int i = 0;
@@ -1128,43 +1029,31 @@ public class Query extends QueryPart {
                 while ((parent != null) && (grandParent != null)) {
                     if (grandParent instanceof Query) {
                         if (parent instanceof Axis) {
-                            throw MondrianResource.instance()
-                                .MdxCalculatedFormulaUsedOnAxis.ex(
-                                    formulaType,
-                                    uniqueName,
-                                    ((QueryAxis) parent).getAxisName());
+                            throw MondrianResource.instance().MdxCalculatedFormulaUsedOnAxis
+                                .ex(formulaType, uniqueName, ((QueryAxis) parent).getAxisName());
 
                         } else if (parent instanceof Formula) {
-                            String parentFormulaType =
-                                ((Formula) parent).isMember()
-                                    ? MondrianResource.instance()
-                                          .CalculatedMember.str()
-                                    : MondrianResource.instance()
-                                          .CalculatedSet.str();
-                            throw MondrianResource.instance()
-                                .MdxCalculatedFormulaUsedInFormula.ex(
-                                    formulaType, uniqueName, parentFormulaType,
-                                    ((Formula) parent).getUniqueName());
+                            final String parentFormulaType = ((Formula) parent).isMember()
+                                ? MondrianResource.instance().CalculatedMember.str()
+                                : MondrianResource.instance().CalculatedSet.str();
+                            throw MondrianResource.instance().MdxCalculatedFormulaUsedInFormula
+                                .ex(formulaType, uniqueName, parentFormulaType, ((Formula) parent).getUniqueName());
 
                         } else {
-                            throw MondrianResource.instance()
-                                .MdxCalculatedFormulaUsedOnSlicer.ex(
-                                    formulaType, uniqueName);
+                            throw MondrianResource.instance().MdxCalculatedFormulaUsedOnSlicer.ex(formulaType, uniqueName);
                         }
                     }
                     ++i;
                     parent = walker.getAncestor(i);
                     grandParent = walker.getAncestor(i + 1);
                 }
-                throw MondrianResource.instance()
-                    .MdxCalculatedFormulaUsedInQuery.ex(
-                        formulaType, uniqueName, Util.unparse(this));
+                throw MondrianResource.instance().MdxCalculatedFormulaUsedInQuery.ex(formulaType, uniqueName, Util.unparse(this));
             }
         }
 
         // remove formula from query
-        List<Formula> formulaList = new ArrayList<Formula>();
-        for (Formula formula1 : formulas) {
+        final List<Formula> formulaList = new ArrayList<Formula>();
+        for (final Formula formula1 : this.formulas) {
             if (!formula1.getUniqueName().equalsIgnoreCase(uniqueName)) {
                 formulaList.add(formula1);
             }
@@ -1183,26 +1072,21 @@ public class Query extends QueryPart {
      * @return whether the formula can safely be removed
      */
     public boolean canRemoveFormula(String uniqueName) {
-        Formula formula = findFormula(uniqueName);
+        final Formula formula = this.findFormula(uniqueName);
         if (formula == null) {
             return false;
         }
 
-        OlapElement mdxElement = formula.getElement();
+        final OlapElement mdxElement = formula.getElement();
         // Search the query tree to see if this formula expression is used
         // anywhere (on the axes or in another formula).
-        Walker walker = new Walker(this);
+        final Walker walker = new Walker(this);
         while (walker.hasMoreElements()) {
-            Object queryElement = walker.nextElement();
-            if (queryElement instanceof MemberExpr
-                && ((MemberExpr) queryElement).getMember().equals(mdxElement))
-            {
+            final Object queryElement = walker.nextElement();
+            if ((queryElement instanceof MemberExpr) && ((MemberExpr) queryElement).getMember().equals(mdxElement)) {
                 return false;
             }
-            if (queryElement instanceof NamedSetExpr
-                && ((NamedSetExpr) queryElement).getNamedSet().equals(
-                    mdxElement))
-            {
+            if ((queryElement instanceof NamedSetExpr) && ((NamedSetExpr) queryElement).getNamedSet().equals(mdxElement)) {
                 return false;
             }
         }
@@ -1216,7 +1100,7 @@ public class Query extends QueryPart {
      * @return formula defining calculated member, or null if not found
      */
     public Formula findFormula(String uniqueName) {
-        for (Formula formula : formulas) {
+        for (final Formula formula : this.formulas) {
             if (formula.getUniqueName().equalsIgnoreCase(uniqueName)) {
                 return formula;
             }
@@ -1228,21 +1112,17 @@ public class Query extends QueryPart {
      * Finds formula by name and renames it to new name.
      */
     public void renameFormula(String uniqueName, String newName) {
-        Formula formula = findFormula(uniqueName);
+        final Formula formula = this.findFormula(uniqueName);
         if (formula == null) {
-            throw MondrianResource.instance().MdxFormulaNotFound.ex(
-                "formula", uniqueName, Util.unparse(this));
+            throw MondrianResource.instance().MdxFormulaNotFound.ex("formula", uniqueName, Util.unparse(this));
         }
         formula.rename(newName);
     }
 
     List<Member> getDefinedMembers() {
-        List<Member> definedMembers = new ArrayList<Member>();
-        for (final Formula formula : formulas) {
-            if (formula.isMember()
-                && formula.getElement() != null
-                && getConnection().getRole().canAccess(formula.getElement()))
-            {
+        final List<Member> definedMembers = new ArrayList<Member>();
+        for (final Formula formula : this.formulas) {
+            if (formula.isMember() && (formula.getElement() != null) && this.getConnection().getRole().canAccess(formula.getElement())) {
                 definedMembers.add((Member) formula.getElement());
             }
         }
@@ -1253,11 +1133,10 @@ public class Query extends QueryPart {
      * Finds axis by index and sets flag to show empty cells on that axis.
      */
     public void setAxisShowEmptyCells(int axis, boolean showEmpty) {
-        if (axis >= axes.length) {
-            throw MondrianResource.instance().MdxAxisShowSubtotalsNotSupported
-                .ex(axis);
+        if (axis >= this.axes.length) {
+            throw MondrianResource.instance().MdxAxisShowSubtotalsNotSupported.ex(axis);
         }
-        axes[axis].setNonEmpty(!showEmpty);
+        this.axes[axis].setNonEmpty(!showEmpty);
     }
 
     /**
@@ -1265,15 +1144,11 @@ public class Query extends QueryPart {
      * {@link #collectHierarchies}.
      */
     public Hierarchy[] getMdxHierarchiesOnAxis(AxisOrdinal axis) {
-        if (axis.logicalOrdinal() >= axes.length) {
-            throw MondrianResource.instance().MdxAxisShowSubtotalsNotSupported
-                .ex(axis.logicalOrdinal());
+        if (axis.logicalOrdinal() >= this.axes.length) {
+            throw MondrianResource.instance().MdxAxisShowSubtotalsNotSupported.ex(axis.logicalOrdinal());
         }
-        QueryAxis queryAxis =
-            axis.isFilter()
-            ? slicerAxis
-            : axes[axis.logicalOrdinal()];
-        return collectHierarchies(queryAxis.getSet());
+        final QueryAxis queryAxis = axis.isFilter() ? this.slicerAxis : this.axes[axis.logicalOrdinal()];
+        return this.collectHierarchies(queryAxis.getSet());
     }
 
     /**
@@ -1285,23 +1160,15 @@ public class Query extends QueryPart {
      *     result style; ignored if expression is scalar
      * @return compiled expression
      */
-    public Calc compileExpression(
-        Exp exp,
-        boolean scalar,
-        ResultStyle resultStyle)
-    {
+    public Calc compileExpression(Exp exp, boolean scalar, ResultStyle resultStyle) {
         // REVIEW: Set query on a connection's shared internal statement is
         // not re-entrant.
-        statement.setQuery(this);
-        Evaluator evaluator = RolapEvaluator.create(statement);
-        final Validator validator = createValidator();
+        this.statement.setQuery(this);
+        final Evaluator evaluator = RolapEvaluator.create(this.statement);
+        final Validator validator = this.createValidator();
         List<ResultStyle> resultStyleList;
-        resultStyleList =
-            Collections.singletonList(
-                resultStyle != null ? resultStyle : this.resultStyle);
-        final ExpCompiler compiler =
-            createCompiler(
-                evaluator, validator, resultStyleList);
+        resultStyleList = Collections.singletonList(resultStyle != null ? resultStyle : this.resultStyle);
+        final ExpCompiler compiler = this.createCompiler(evaluator, validator, resultStyleList);
         if (scalar) {
             return compiler.compileScalar(exp, false);
         } else {
@@ -1312,29 +1179,17 @@ public class Query extends QueryPart {
     public ExpCompiler createCompiler() {
         // REVIEW: Set query on a connection's shared internal statement is
         // not re-entrant.
-        statement.setQuery(this);
-        Evaluator evaluator = RolapEvaluator.create(statement);
-        Validator validator = createValidator();
-        return createCompiler(
-            evaluator,
-            validator,
-            Collections.singletonList(resultStyle));
+        this.statement.setQuery(this);
+        final Evaluator evaluator = RolapEvaluator.create(this.statement);
+        final Validator validator = this.createValidator();
+        return this.createCompiler(evaluator, validator, Collections.singletonList(this.resultStyle));
     }
 
-    private ExpCompiler createCompiler(
-        final Evaluator evaluator,
-        final Validator validator,
-        List<ResultStyle> resultStyleList)
-    {
-        ExpCompiler compiler =
-            ExpCompiler.Factory.getExpCompiler(
-                evaluator,
-                validator,
-                resultStyleList);
+    private ExpCompiler createCompiler(final Evaluator evaluator, final Validator validator, List<ResultStyle> resultStyleList) {
+        ExpCompiler compiler = ExpCompiler.Factory.getExpCompiler(evaluator, validator, resultStyleList);
 
-        final int expDeps =
-            MondrianProperties.instance().TestExpDependencies.get();
-        final ProfileHandler profileHandler = statement.getProfileHandler();
+        final int expDeps = MondrianProperties.instance().TestExpDependencies.get();
+        final ProfileHandler profileHandler = this.statement.getProfileHandler();
         if (profileHandler != null) {
             // Cannot test dependencies and profile at the same time. Profiling
             // trumps.
@@ -1350,12 +1205,11 @@ public class Query extends QueryPart {
      *
      * @param olapElement potential measure member
      */
-    public void addMeasuresMembers(OlapElement olapElement)
-    {
+    public void addMeasuresMembers(OlapElement olapElement) {
         if (olapElement instanceof Member) {
-            Member member = (Member) olapElement;
+            final Member member = (Member) olapElement;
             if (member.isMeasure()) {
-                measuresMembers.add(member);
+                this.measuresMembers.add(member);
             }
         }
     }
@@ -1365,7 +1219,7 @@ public class Query extends QueryPart {
      * this query
      */
     public Set<Member> getMeasuresMembers() {
-        return Collections.unmodifiableSet(measuresMembers);
+        return Collections.unmodifiableSet(this.measuresMembers);
     }
 
     /**
@@ -1373,7 +1227,7 @@ public class Query extends QueryPart {
      * this virtual cube
      */
     public void setVirtualCubeNonNativeCrossJoin() {
-        nativeCrossJoinVirtualCube = false;
+        this.nativeCrossJoinVirtualCube = false;
     }
 
     /**
@@ -1381,7 +1235,7 @@ public class Query extends QueryPart {
      * cube
      */
     public boolean nativeCrossJoinVirtualCube() {
-        return nativeCrossJoinVirtualCube;
+        return this.nativeCrossJoinVirtualCube;
     }
 
     /**
@@ -1401,23 +1255,23 @@ public class Query extends QueryPart {
      * @return set of base cubes
      */
     public List<RolapCube> getBaseCubes() {
-        return baseCubes;
+        return this.baseCubes;
     }
 
     public Object accept(MdxVisitor visitor) {
-        Object o = visitor.visit(this);
+        final Object o = visitor.visit(this);
 
         if (visitor.shouldVisitChildren()) {
             // visit formulas
-            for (Formula formula : formulas) {
+            for (final Formula formula : this.formulas) {
                 formula.accept(visitor);
             }
             // visit axes
-            for (QueryAxis axis : axes) {
+            for (final QueryAxis axis : this.axes) {
                 axis.accept(visitor);
             }
-            if (slicerAxis != null) {
-                slicerAxis.accept(visitor);
+            if (this.slicerAxis != null) {
+                this.slicerAxis.accept(visitor);
             }
         }
         return o;
@@ -1432,7 +1286,7 @@ public class Query extends QueryPart {
      * @param value the cache value
      */
     public void putEvalCache(String key, Object value) {
-        evalCache.put(key, value);
+        this.evalCache.put(key, value);
     }
 
     /**
@@ -1442,14 +1296,14 @@ public class Query extends QueryPart {
      * @return the cached value or null.
      */
     public Object getEvalCache(String key) {
-        return evalCache.get(key);
+        return this.evalCache.get(key);
     }
 
     /**
      * Remove all entries in the evaluation cache
      */
     public void clearEvalCache() {
-        evalCache.clear();
+        this.evalCache.clear();
     }
 
     /**
@@ -1462,14 +1316,15 @@ public class Query extends QueryPart {
      *
      * @deprecated This method will be removed in mondrian-4.0.
      */
+    @Deprecated
     public void close() {
-        if (ownStatement) {
-            statement.close();
+        if (this.ownStatement) {
+            this.statement.close();
         }
     }
 
     public Statement getStatement() {
-        return statement;
+        return this.statement;
     }
 
     /**
@@ -1490,10 +1345,7 @@ public class Query extends QueryPart {
      * perform access control; all calculated members defined in a query are
      * visible to everyone.
      */
-    private static class QuerySchemaReader
-        extends DelegatingSchemaReader
-        implements NameResolver.Namespace
-    {
+    private static class QuerySchemaReader extends DelegatingSchemaReader implements NameResolver.Namespace {
         private final Query query;
 
         public QuerySchemaReader(SchemaReader cubeSchemaReader, Query query) {
@@ -1501,37 +1353,31 @@ public class Query extends QueryPart {
             this.query = query;
         }
 
+        @Override
         public SchemaReader withoutAccessControl() {
-            return new QuerySchemaReader(
-                schemaReader.withoutAccessControl(), query);
+            return new QuerySchemaReader(this.schemaReader.withoutAccessControl(), this.query);
         }
 
-        public Member getMemberByUniqueName(
-            List<Id.Segment> uniqueNameParts,
-            boolean failIfNotFound,
-            MatchType matchType)
-        {
+        @Override
+        public Member getMemberByUniqueName(List<Id.Segment> uniqueNameParts, boolean failIfNotFound, MatchType matchType) {
             final String uniqueName = Util.implode(uniqueNameParts);
-            Member member = query.lookupMemberFromCache(uniqueName);
+            Member member = this.query.lookupMemberFromCache(uniqueName);
             if (member == null) {
                 // Not a calculated member in the query, so go to the cube.
-                member = schemaReader.getMemberByUniqueName(
-                    uniqueNameParts, failIfNotFound, matchType);
+                member = this.schemaReader.getMemberByUniqueName(uniqueNameParts, failIfNotFound, matchType);
             }
-            if (!failIfNotFound && member == null) {
+            if (!failIfNotFound && (member == null)) {
                 return null;
             }
-            if (getRole().canAccess(member)) {
+            if (this.getRole().canAccess(member)) {
                 return member;
             } else {
                 return null;
             }
         }
 
-        public List<Member> getLevelMembers(
-            Level level,
-            boolean includeCalculated)
-        {
+        @Override
+        public List<Member> getLevelMembers(Level level, boolean includeCalculated) {
             List<Member> members = super.getLevelMembers(level, false);
             if (includeCalculated) {
                 members = Util.addLevelCalculatedMembers(this, level, members);
@@ -1539,19 +1385,20 @@ public class Query extends QueryPart {
             return members;
         }
 
+        @Override
         public Member getCalculatedMember(List<Id.Segment> nameParts) {
-            for (final Formula formula : query.formulas) {
+            for (final Formula formula : this.query.formulas) {
                 if (!formula.isMember()) {
                     continue;
                 }
-                Member member = (Member) formula.getElement();
+                final Member member = (Member) formula.getElement();
                 if (member == null) {
                     continue;
                 }
                 if (!Util.matches(member, nameParts)) {
                     continue;
                 }
-                if (!query.getConnection().getRole().canAccess(member)) {
+                if (!this.query.getConnection().getRole().canAccess(member)) {
                     continue;
                 }
                 return member;
@@ -1559,16 +1406,14 @@ public class Query extends QueryPart {
             return null;
         }
 
-
-
+        @Override
         public List<Member> getCalculatedMembers(Hierarchy hierarchy) {
-            List<Member> result = new ArrayList<Member>();
+            final List<Member> result = new ArrayList<Member>();
             // Add calculated members in the cube.
-            final List<Member> calculatedMembers =
-                super.getCalculatedMembers(hierarchy);
+            final List<Member> calculatedMembers = super.getCalculatedMembers(hierarchy);
             result.addAll(calculatedMembers);
             // Add calculated members defined in the query.
-            for (Member member : query.getDefinedMembers()) {
+            for (final Member member : this.query.getDefinedMembers()) {
                 if (member.getHierarchy().equals(hierarchy)) {
                     result.add(member);
                 }
@@ -1576,11 +1421,11 @@ public class Query extends QueryPart {
             return result;
         }
 
+        @Override
         public List<Member> getCalculatedMembers(Level level) {
-            List<Member> hierarchyMembers =
-                getCalculatedMembers(level.getHierarchy());
-            List<Member> result = new ArrayList<Member>();
-            for (Member member : hierarchyMembers) {
+            final List<Member> hierarchyMembers = this.getCalculatedMembers(level.getHierarchy());
+            final List<Member> result = new ArrayList<Member>();
+            for (final Member member : hierarchyMembers) {
                 if (member.getLevel().equals(level)) {
                     result.add(member);
                 }
@@ -1588,23 +1433,20 @@ public class Query extends QueryPart {
             return result;
         }
 
+        @Override
         public List<Member> getCalculatedMembers() {
-            return query.getDefinedMembers();
+            return this.query.getDefinedMembers();
         }
 
-        public OlapElement getElementChild(OlapElement parent, Id.Segment s)
-        {
-            return getElementChild(parent, s, MatchType.EXACT);
+        @Override
+        public OlapElement getElementChild(OlapElement parent, Id.Segment s) {
+            return this.getElementChild(parent, s, MatchType.EXACT);
         }
 
-        public OlapElement getElementChild(
-            OlapElement parent,
-            Id.Segment s,
-            MatchType matchType)
-        {
+        @Override
+        public OlapElement getElementChild(OlapElement parent, Id.Segment s, MatchType matchType) {
             // first look in cube
-            OlapElement mdxElement =
-                schemaReader.getElementChild(parent, s, matchType);
+            final OlapElement mdxElement = this.schemaReader.getElementChild(parent, s, matchType);
             if (mdxElement != null) {
                 return mdxElement;
             }
@@ -1614,15 +1456,13 @@ public class Query extends QueryPart {
             if (!(s instanceof Id.NameSegment)) {
                 return null;
             }
-            String name = ((Id.NameSegment) s).getName();
-            for (Formula formula : query.formulas) {
+            final String name = ((Id.NameSegment) s).getName();
+            for (final Formula formula : this.query.formulas) {
                 if (formula.isMember()) {
-                    continue;       // have already done these
+                    continue; // have already done these
                 }
-                Id id = formula.getIdentifier();
-                if (id.getSegments().size() == 1
-                    && id.getSegments().get(0).matches(name))
-                {
+                final Id id = formula.getIdentifier();
+                if ((id.getSegments().size() == 1) && id.getSegments().get(0).matches(name)) {
                     return formula.getNamedSet();
                 }
             }
@@ -1631,72 +1471,68 @@ public class Query extends QueryPart {
         }
 
         @Override
-        public OlapElement lookupCompoundInternal(
-            OlapElement parent,
+        public OlapElement lookupCompoundInternal(OlapElement parent,
             List<Id.Segment> names,
             boolean failIfNotFound,
             int category,
-            MatchType matchType)
-        {
+            MatchType matchType) {
             if (matchType == MatchType.EXACT) {
-                OlapElement oe = lookupCompound(
-                    parent, names, failIfNotFound, category,
-                    MatchType.EXACT_SCHEMA);
+                final OlapElement oe = this.lookupCompound(parent, names, failIfNotFound, category, MatchType.EXACT_SCHEMA);
                 if (oe != null) {
                     return oe;
                 }
             }
             // First look to ourselves.
             switch (category) {
-            case Category.Unknown:
-            case Category.Member:
-                if (parent == query.cube) {
-                    final Member calculatedMember = getCalculatedMember(names);
-                    if (calculatedMember != null) {
-                        return calculatedMember;
+                case Category.Unknown:
+                case Category.Member:
+                    if (parent == this.query.cube) {
+                        final Member calculatedMember = this.getCalculatedMember(names);
+                        if (calculatedMember != null) {
+                            return calculatedMember;
+                        }
                     }
-                }
             }
             switch (category) {
-            case Category.Unknown:
-            case Category.Set:
-                if (parent == query.cube) {
-                    final NamedSet namedSet = getNamedSet(names);
-                    if (namedSet != null) {
-                        return namedSet;
+                case Category.Unknown:
+                case Category.Set:
+                    if (parent == this.query.cube) {
+                        final NamedSet namedSet = this.getNamedSet(names);
+                        if (namedSet != null) {
+                            return namedSet;
+                        }
                     }
-                }
             }
             // Then delegate to the next reader.
-            OlapElement olapElement = super.lookupCompoundInternal(
-                parent, names, failIfNotFound, category, matchType);
+            OlapElement olapElement = super.lookupCompoundInternal(parent, names, failIfNotFound, category, matchType);
             if (olapElement instanceof Member) {
-                Member member = (Member) olapElement;
-                final Formula formula = (Formula)
-                    member.getPropertyValue(Property.FORMULA.name);
+                final Member member = (Member) olapElement;
+                final Formula formula = (Formula) member.getPropertyValue(Property.FORMULA.name);
                 if (formula != null) {
                     // This is a calculated member defined against the cube.
                     // Create a free-standing formula using the same
                     // expression, then use the member defined in that formula.
                     final Formula formulaClone = (Formula) formula.clone();
-                    formulaClone.createElement(query);
-                    formulaClone.accept(query.createValidator());
+                    formulaClone.createElement(this.query);
+                    formulaClone.accept(this.query.createValidator());
                     olapElement = formulaClone.getMdxMember();
                 }
             }
             return olapElement;
         }
 
+        @Override
         public NamedSet getNamedSet(List<Id.Segment> nameParts) {
             if (nameParts.size() != 1) {
                 return null;
             }
-            return query.lookupNamedSet(nameParts.get(0));
+            return this.query.lookupNamedSet(nameParts.get(0));
         }
 
+        @Override
         public Parameter getParameter(String name) {
             // Look for a parameter defined in the query.
-            for (Parameter parameter : query.parameters) {
+            for (final Parameter parameter : this.query.parameters) {
                 if (parameter.getName().equals(name)) {
                     return parameter;
                 }
@@ -1704,34 +1540,28 @@ public class Query extends QueryPart {
 
             // Look for a parameter defined in this statement.
             if (Util.lookup(RolapConnectionProperties.class, name) != null) {
-                Object value = query.statement.getProperty(name);
+                final Object value = this.query.statement.getProperty(name);
                 // TODO: Don't assume it's a string.
                 // TODO: Create expression which will get the value from the
                 //  statement at the time the query is executed.
-                Literal defaultValue =
-                    Literal.createString(String.valueOf(value));
+                final Literal defaultValue = Literal.createString(String.valueOf(value));
                 return new ConnectionParameterImpl(name, defaultValue);
             }
 
             return super.getParameter(name);
         }
 
-        public OlapElement lookupChild(
-            OlapElement parent,
-            IdentifierSegment segment,
-            MatchType matchType)
-        {
+        @Override
+        public OlapElement lookupChild(OlapElement parent, IdentifierSegment segment, MatchType matchType) {
             // ignore matchType
-            return lookupChild(parent, segment);
+            return this.lookupChild(parent, segment);
         }
 
-        public OlapElement lookupChild(
-            OlapElement parent,
-            IdentifierSegment segment)
-        {
+        @Override
+        public OlapElement lookupChild(OlapElement parent, IdentifierSegment segment) {
             // Only look for calculated members and named sets defined in the
             // query.
-            for (Formula formula : query.getFormulas()) {
+            for (final Formula formula : this.query.getFormulas()) {
                 if (NameResolver.matches(formula, parent, segment)) {
                     return formula.getElement();
                 }
@@ -1739,29 +1569,28 @@ public class Query extends QueryPart {
             return null;
         }
 
+        @Override
         public List<NameResolver.Namespace> getNamespaces() {
-            final List<NameResolver.Namespace> list =
-                new ArrayList<NameResolver.Namespace>();
+            final List<NameResolver.Namespace> list = new ArrayList<NameResolver.Namespace>();
             list.add(this);
             list.addAll(super.getNamespaces());
             return list;
         }
     }
 
-    private static class ConnectionParameterImpl
-        extends ParameterImpl
-    {
+    private static class ConnectionParameterImpl extends ParameterImpl {
         public ConnectionParameterImpl(String name, Literal defaultValue) {
             super(name, defaultValue, "Connection property", new StringType());
         }
 
+        @Override
         public Scope getScope() {
             return Scope.Connection;
         }
 
+        @Override
         public void setValue(Object value) {
-            throw MondrianResource.instance().ParameterIsNotModifiable.ex(
-                getName(), getScope().name());
+            throw MondrianResource.instance().ParameterIsNotModifiable.ex(this.getName(), this.getScope().name());
         }
     }
 
@@ -1776,7 +1605,7 @@ public class Query extends QueryPart {
      */
     private static class QueryValidator extends ValidatorImpl {
         private final boolean alwaysResolveFunDef;
-        private Query query;
+        private final Query query;
         private final SchemaReader schemaReader;
 
         /**
@@ -1787,36 +1616,38 @@ public class Query extends QueryPart {
          *     definitions (see {@link #alwaysResolveFunDef()})
          * @param query Query
          */
-        public QueryValidator(
-            FunTable functionTable, boolean alwaysResolveFunDef, Query query,
-            Map<QueryPart, QueryPart> resolvedIdentifiers)
-        {
+        public QueryValidator(FunTable functionTable, boolean alwaysResolveFunDef, Query query,
+            Map<QueryPart, QueryPart> resolvedIdentifiers) {
             super(functionTable, resolvedIdentifiers);
             this.alwaysResolveFunDef = alwaysResolveFunDef;
             this.query = query;
             this.schemaReader = new ScopedSchemaReader(this, true);
         }
 
+        @Override
         public SchemaReader getSchemaReader() {
-            return schemaReader;
+            return this.schemaReader;
         }
 
+        @Override
         protected void defineParameter(Parameter param) {
             final String name = param.getName();
-            query.parameters.add(param);
-            query.parametersByName.put(name, param);
+            this.query.parameters.add(param);
+            this.query.parametersByName.put(name, param);
         }
 
+        @Override
         public Query getQuery() {
-            return query;
+            return this.query;
         }
 
+        @Override
         public boolean alwaysResolveFunDef() {
-            return alwaysResolveFunDef;
+            return this.alwaysResolveFunDef;
         }
 
         public ArrayStack<QueryPart> getScopeStack() {
-            return stack;
+            return this.stack;
         }
     }
 
@@ -1826,10 +1657,7 @@ public class Query extends QueryPart {
      * visible. The scope is represented by the expression stack inside the
      * validator.
      */
-    private static class ScopedSchemaReader
-        extends DelegatingSchemaReader
-        implements NameResolver.Namespace
-    {
+    private static class ScopedSchemaReader extends DelegatingSchemaReader implements NameResolver.Namespace {
         private final QueryValidator queryValidator;
         private final boolean accessControlled;
 
@@ -1840,71 +1668,61 @@ public class Query extends QueryPart {
          *     query
          * @param accessControlled Access controlled
          */
-        private ScopedSchemaReader(
-            QueryValidator queryValidator,
-            boolean accessControlled)
-        {
+        private ScopedSchemaReader(QueryValidator queryValidator, boolean accessControlled) {
             super(queryValidator.getQuery().getSchemaReader(accessControlled));
             this.queryValidator = queryValidator;
             this.accessControlled = accessControlled;
         }
 
+        @Override
         public SchemaReader withoutAccessControl() {
-            if (!accessControlled) {
+            if (!this.accessControlled) {
                 return this;
             }
-            return new ScopedSchemaReader(queryValidator, false);
+            return new ScopedSchemaReader(this.queryValidator, false);
         }
 
+        @Override
         public List<NameResolver.Namespace> getNamespaces() {
-            final List<NameResolver.Namespace> list =
-                new ArrayList<NameResolver.Namespace>();
+            final List<NameResolver.Namespace> list = new ArrayList<NameResolver.Namespace>();
             list.add(this);
             list.addAll(super.getNamespaces());
             return list;
         }
 
         @Override
-        public OlapElement lookupCompoundInternal(
-            OlapElement parent,
+        public OlapElement lookupCompoundInternal(OlapElement parent,
             final List<Id.Segment> names,
             boolean failIfNotFound,
             int category,
-            MatchType matchType)
-        {
+            MatchType matchType) {
             switch (category) {
-            case Category.Set:
-            case Category.Unknown:
-                final ScopedNamedSet namedSet =
-                    queryValidator.getQuery().lookupScopedNamedSet(
-                        names, queryValidator.getScopeStack());
-                if (namedSet != null) {
-                    return namedSet;
-                }
+                case Category.Set:
+                case Category.Unknown:
+                    final ScopedNamedSet namedSet = this.queryValidator
+                        .getQuery()
+                            .lookupScopedNamedSet(names, this.queryValidator.getScopeStack());
+                    if (namedSet != null) {
+                        return namedSet;
+                    }
             }
-            return super.lookupCompoundInternal(
-                parent, names, failIfNotFound, category, matchType);
+            return super.lookupCompoundInternal(parent, names, failIfNotFound, category, matchType);
         }
 
-        public OlapElement lookupChild(
-            OlapElement parent,
-            IdentifierSegment segment,
-            MatchType matchType)
-        {
+        @Override
+        public OlapElement lookupChild(OlapElement parent, IdentifierSegment segment, MatchType matchType) {
             // ignore matchType
-            return lookupChild(parent, segment);
+            return this.lookupChild(parent, segment);
         }
 
-        public OlapElement lookupChild(
-            OlapElement parent,
-            IdentifierSegment segment)
-        {
+        @Override
+        public OlapElement lookupChild(OlapElement parent, IdentifierSegment segment) {
             if (!(parent instanceof Cube)) {
                 return null;
             }
-            return queryValidator.getQuery().lookupScopedNamedSet(
-                Collections.singletonList(Util.convert(segment)),
-                queryValidator.getScopeStack());
+            return this.queryValidator
+                .getQuery()
+                    .lookupScopedNamedSet(Collections.singletonList(Util.convert(segment)), this.queryValidator.getScopeStack());
         }
     }
 
@@ -1927,87 +1745,97 @@ public class Query extends QueryPart {
             this.expr = expr;
         }
 
+        @Override
         public String getName() {
-            return name;
+            return this.name;
         }
 
+        @Override
         public String getNameUniqueWithinQuery() {
             return System.identityHashCode(this) + "";
         }
 
+        @Override
         public boolean isDynamic() {
             return true;
         }
 
+        @Override
         public Exp getExp() {
-            return expr;
+            return this.expr;
         }
 
         public void setExp(Exp expr) {
             this.expr = expr;
         }
 
+        @Override
         public void setName(String newName) {
             throw new UnsupportedOperationException();
         }
 
+        @Override
         public Type getType() {
-            return expr.getType();
+            return this.expr.getType();
         }
 
+        @Override
         public Map<String, Annotation> getAnnotationMap() {
             return Collections.emptyMap();
         }
 
+        @Override
         public NamedSet validate(Validator validator) {
-            Exp newExpr = expr.accept(validator);
+            Exp newExpr = this.expr.accept(validator);
             final Type type = newExpr.getType();
-            if (type instanceof MemberType
-                || type instanceof TupleType)
-            {
-                newExpr =
-                    new UnresolvedFunCall(
-                        "{}", Syntax.Braces, new Exp[] {newExpr})
-                    .accept(validator);
+            if ((type instanceof MemberType) || (type instanceof TupleType)) {
+                newExpr = new UnresolvedFunCall("{}", Syntax.Braces, new Exp[] { newExpr }).accept(validator);
             }
             this.expr = newExpr;
             return this;
         }
 
+        @Override
         public String getUniqueName() {
-            return name;
+            return this.name;
         }
 
+        @Override
         public String getDescription() {
             throw new UnsupportedOperationException();
         }
 
-        public OlapElement lookupChild(
-            SchemaReader schemaReader, Id.Segment s, MatchType matchType)
-        {
+        @Override
+        public OlapElement lookupChild(SchemaReader schemaReader, Id.Segment s, MatchType matchType) {
             throw new UnsupportedOperationException();
         }
 
+        @Override
         public String getQualifiedName() {
             throw new UnsupportedOperationException();
         }
 
+        @Override
         public String getCaption() {
             throw new UnsupportedOperationException();
         }
 
+        @Override
         public boolean isVisible() {
             throw new UnsupportedOperationException();
         }
 
+        @Override
         public Hierarchy getHierarchy() {
             throw new UnsupportedOperationException();
         }
 
+        @Override
         public Dimension getDimension() {
             throw new UnsupportedOperationException();
         }
 
+        @Override
         public String getLocalized(LocalizedProperty prop, Locale locale) {
             throw new UnsupportedOperationException();
         }
@@ -2017,34 +1845,32 @@ public class Query extends QueryPart {
      * Visitor that locates and registers parameters.
      */
     private class ParameterFinder extends MdxVisitorImpl {
+        @Override
         public Object visit(ParameterExpr parameterExpr) {
-            Parameter parameter = parameterExpr.getParameter();
-            if (!parameters.contains(parameter)) {
-                parameters.add(parameter);
-                parametersByName.put(parameter.getName(), parameter);
+            final Parameter parameter = parameterExpr.getParameter();
+            if (!Query.this.parameters.contains(parameter)) {
+                Query.this.parameters.add(parameter);
+                Query.this.parametersByName.put(parameter.getName(), parameter);
             }
             return null;
         }
 
+        @Override
         public Object visit(UnresolvedFunCall call) {
             if (call.getFunName().equals("Parameter")) {
                 // Is there already a parameter with this name?
-                String parameterName =
-                    ParameterFunDef.getParameterName(call.getArgs());
-                if (parametersByName.get(parameterName) != null) {
-                    throw MondrianResource.instance()
-                        .ParameterDefinedMoreThanOnce.ex(parameterName);
+                final String parameterName = ParameterFunDef.getParameterName(call.getArgs());
+                if (Query.this.parametersByName.get(parameterName) != null) {
+                    throw MondrianResource.instance().ParameterDefinedMoreThanOnce.ex(parameterName);
                 }
 
-                Type type =
-                    ParameterFunDef.getParameterType(call.getArgs());
+                final Type type = ParameterFunDef.getParameterType(call.getArgs());
 
                 // Create a temporary parameter. We don't know its
                 // type yet. The default of NULL is temporary.
-                Parameter parameter = new ParameterImpl(
-                    parameterName, Literal.nullValue, null, type);
-                parameters.add(parameter);
-                parametersByName.put(parameterName, parameter);
+                final Parameter parameter = new ParameterImpl(parameterName, Literal.nullValue, null, type);
+                Query.this.parameters.add(parameter);
+                Query.this.parametersByName.put(parameterName, parameter);
             }
             return null;
         }
@@ -2058,17 +1884,19 @@ public class Query extends QueryPart {
     private class AliasedExpressionFinder extends MdxVisitorImpl {
         @Override
         public Object visit(QueryAxis queryAxis) {
-            registerAlias(queryAxis, queryAxis.getSet());
+            this.registerAlias(queryAxis, queryAxis.getSet());
             return super.visit(queryAxis);
         }
 
+        @Override
         public Object visit(UnresolvedFunCall call) {
-            registerAliasArgs(call);
+            this.registerAliasArgs(call);
             return super.visit(call);
         }
 
+        @Override
         public Object visit(ResolvedFunCall call) {
-            registerAliasArgs(call);
+            this.registerAliasArgs(call);
             return super.visit(call);
         }
 
@@ -2078,8 +1906,8 @@ public class Query extends QueryPart {
          * @param call Function call
          */
         private void registerAliasArgs(FunCall call) {
-            for (Exp exp : call.getArgs()) {
-                registerAlias((QueryPart) call, exp);
+            for (final Exp exp : call.getArgs()) {
+                this.registerAlias((QueryPart) call, exp);
             }
         }
 
@@ -2092,10 +1920,8 @@ public class Query extends QueryPart {
          */
         private void registerAlias(QueryPart parent, Exp exp) {
             if (exp instanceof FunCall) {
-                FunCall call2 = (FunCall) exp;
-                if (call2.getSyntax() == Syntax.Infix
-                    && call2.getFunName().equals("AS"))
-                {
+                final FunCall call2 = (FunCall) exp;
+                if ((call2.getSyntax() == Syntax.Infix) && call2.getFunName().equals("AS")) {
                     // Scope is the function enclosing the 'AS' expression.
                     // For example, in
                     //    Filter(Time.Children AS s, x > y)
@@ -2103,17 +1929,10 @@ public class Query extends QueryPart {
                     assert call2.getArgCount() == 2;
                     if (call2.getArg(1) instanceof Id) {
                         final Id id = (Id) call2.getArg(1);
-                        createScopedNamedSet(
-                            ((Id.NameSegment) id.getSegments().get(0))
-                                .getName(),
-                            parent,
-                            call2.getArg(0));
+                        Query.this.createScopedNamedSet(((Id.NameSegment) id.getSegments().get(0)).getName(), parent, call2.getArg(0));
                     } else if (call2.getArg(1) instanceof NamedSetExpr) {
-                        NamedSetExpr set = (NamedSetExpr) call2.getArg(1);
-                        createScopedNamedSet(
-                            set.getNamedSet().getName(),
-                            parent,
-                            call2.getArg(0));
+                        final NamedSetExpr set = (NamedSetExpr) call2.getArg(1);
+                        Query.this.createScopedNamedSet(set.getNamedSet().getName(), parent, call2.getArg(0));
                     }
                 }
             }

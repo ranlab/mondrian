@@ -9,13 +9,14 @@
 
 package mondrian.server;
 
+import org.apache.log4j.Logger;
+
 import mondrian.olap.MondrianServer;
+import mondrian.olap.MondrianServerVersion;
 import mondrian.olap.Util;
 import mondrian.spi.CatalogLocator;
 import mondrian.spi.impl.IdentityCatalogLocator;
 import mondrian.util.LockBox;
-
-import org.apache.log4j.Logger;
 
 /**
  * Registry of all servers within this JVM, and also serves as a factory for
@@ -27,10 +28,8 @@ import org.apache.log4j.Logger;
  * @author jhyde
  */
 public class MondrianServerRegistry {
-    public static final Logger logger =
-        Logger.getLogger(MondrianServerRegistry.class);
-    public static final MondrianServerRegistry INSTANCE =
-        new MondrianServerRegistry();
+    public static final Logger logger = Logger.getLogger(MondrianServerRegistry.class);
+    public static final MondrianServerRegistry INSTANCE = new MondrianServerRegistry();
 
     public MondrianServerRegistry() {
         super();
@@ -44,8 +43,7 @@ public class MondrianServerRegistry {
     /**
      * The one and only one server that does not have a repository.
      */
-    final MondrianServer staticServer =
-        createWithRepository(null, null);
+    final MondrianServer staticServer = this.createWithRepository(null, null);
 
     /**
      * Looks up a server with a given id. If the id is null, returns the
@@ -57,48 +55,45 @@ public class MondrianServerRegistry {
      */
     public MondrianServer serverForId(String instanceId) {
         if (instanceId != null) {
-            final LockBox.Entry entry = lockBox.get(instanceId);
+            final LockBox.Entry entry = this.lockBox.get(instanceId);
             if (entry == null) {
-                throw Util.newError(
-                    "No server instance has id '" + instanceId + "'");
+                throw Util.newError("No server instance has id '" + instanceId + "'");
             }
             return (MondrianServer) entry.getValue();
         } else {
-            return staticServer;
+            return this.staticServer;
         }
     }
 
     public String getCopyrightYear() {
-        return MondrianServerVersion.COPYRIGHT_YEAR;
+        return mondrian.olap.MondrianServerVersion.COPYRIGHT_YEAR;
     }
 
     public String getProductVersion() {
-        return MondrianServerVersion.VERSION;
+        return mondrian.olap.MondrianServerVersion.VERSION;
     }
 
     public MondrianServer.MondrianVersion getVersion() {
-        if (logger.isDebugEnabled()){
-            logger.debug(" Vendor: " + MondrianServerVersion.VENDOR);
-            final String title = MondrianServerVersion.NAME;
+        if (logger.isDebugEnabled()) {
+            logger.debug(" Vendor: " + mondrian.olap.MondrianServerVersion.VENDOR);
+            final String title = mondrian.olap.MondrianServerVersion.NAME;
             logger.debug("  Title: " + title);
             final String versionString = MondrianServerVersion.VERSION;
             logger.debug("Version: " + versionString);
-            final int majorVersion = MondrianServerVersion.MAJOR_VERSION;
+            final int majorVersion = java.lang.Integer.parseInt(mondrian.olap.MondrianServerVersion.MAJOR_VERSION);
             logger.debug(String.format("Major Version: %d", majorVersion));
-            final int minorVersion = MondrianServerVersion.MINOR_VERSION;
+            final int minorVersion = java.lang.Integer.parseInt(mondrian.olap.MondrianServerVersion.MINOR_VERSION);
             logger.debug(String.format("Minor Version: %d", minorVersion));
         }
         final StringBuilder sb = new StringBuilder();
         try {
-            Integer.parseInt(MondrianServerVersion.VERSION);
-            sb.append(MondrianServerVersion.VERSION);
-        } catch (NumberFormatException e) {
+            Integer.parseInt(mondrian.olap.MondrianServerVersion.VERSION);
+            sb.append(mondrian.olap.MondrianServerVersion.VERSION);
+        } catch (final NumberFormatException e) {
             // Version is not a number (e.g. "TRUNK-SNAPSHOT").
             // Fall back on VersionMajor, VersionMinor, if present.
-            final String versionMajor =
-                String.valueOf(MondrianServerVersion.MAJOR_VERSION);
-            final String versionMinor =
-                String.valueOf(MondrianServerVersion.MINOR_VERSION);
+            final String versionMajor = String.valueOf(mondrian.olap.MondrianServerVersion.MAJOR_VERSION);
+            final String versionMinor = String.valueOf(mondrian.olap.MondrianServerVersion.MINOR_VERSION);
             if (versionMajor != null) {
                 sb.append(versionMajor);
             }
@@ -107,25 +102,26 @@ public class MondrianServerRegistry {
             }
         }
         return new MondrianServer.MondrianVersion() {
+            @Override
             public String getVersionString() {
                 return sb.toString();
             }
+            @Override
             public String getProductName() {
-                return MondrianServerVersion.NAME;
+                return mondrian.olap.MondrianServerVersion.NAME;
             }
+            @Override
             public int getMinorVersion() {
-                return MondrianServerVersion.MINOR_VERSION;
+                return java.lang.Integer.parseInt(mondrian.olap.MondrianServerVersion.MINOR_VERSION);
             }
+            @Override
             public int getMajorVersion() {
-                return MondrianServerVersion.MAJOR_VERSION;
+                return java.lang.Integer.parseInt(mondrian.olap.MondrianServerVersion.MAJOR_VERSION);
             }
         };
     }
 
-    public MondrianServer createWithRepository(
-        RepositoryContentFinder contentFinder,
-        CatalogLocator catalogLocator)
-    {
+    public MondrianServer createWithRepository(RepositoryContentFinder contentFinder, CatalogLocator catalogLocator) {
         if (catalogLocator == null) {
             catalogLocator = new IdentityCatalogLocator();
         }
@@ -133,8 +129,8 @@ public class MondrianServerRegistry {
         if (contentFinder == null) {
             // NOTE: registry.staticServer is initialized by calling this
             // method; this is the only time that it is null.
-            if (staticServer != null) {
-                return staticServer;
+            if (this.staticServer != null) {
+                return this.staticServer;
             }
             repository = new ImplicitRepository();
         } else {

@@ -8,14 +8,31 @@
 */
 package mondrian.olap.fun;
 
-import mondrian.calc.*;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+
+import mondrian.calc.IterCalc;
+import mondrian.calc.ListCalc;
+import mondrian.calc.TupleCollections;
+import mondrian.calc.TupleIterable;
+import mondrian.calc.TupleList;
 import mondrian.calc.impl.DelegatingTupleList;
 import mondrian.mdx.UnresolvedFunCall;
-import mondrian.olap.*;
+import mondrian.olap.Dimension;
+import mondrian.olap.Evaluator;
+import mondrian.olap.Exp;
+import mondrian.olap.FunDef;
+import mondrian.olap.Hierarchy;
+import mondrian.olap.Member;
+import mondrian.olap.MondrianProperties;
+import mondrian.olap.Syntax;
+import mondrian.olap.Validator;
 import mondrian.resource.MondrianResource;
-import mondrian.rolap.*;
-
-import java.util.*;
+import mondrian.rolap.RolapCube;
+import mondrian.rolap.RolapMember;
+import mondrian.rolap.RolapStoredMeasure;
 
 /**
  * Abstract base class for all aggregate functions (<code>Aggregate</code>,
@@ -29,20 +46,15 @@ public class AbstractAggregateFunDef extends FunDefBase {
         super(dummyFunDef);
     }
 
-    protected Exp validateArg(
-        Validator validator, Exp[] args, int i, int category)
-    {
+    @Override
+    protected Exp validateArg(Validator validator, Exp[] args, int i, int category) {
         // If expression cache is enabled, wrap first expression (the set)
         // in a function which will use the expression cache.
         if (i == 0) {
             if (MondrianProperties.instance().EnableExpCache.get()) {
-                Exp arg = args[0];
+                final Exp arg = args[0];
                 if (FunUtil.worthCaching(arg)) {
-                    final Exp cacheCall =
-                        new UnresolvedFunCall(
-                            CacheFunDef.NAME,
-                            Syntax.Function,
-                            new Exp[] {arg});
+                    final Exp cacheCall = new UnresolvedFunCall(CacheFunDef.NAME, Syntax.Function, new Exp[] { arg });
                     return validator.validate(cacheCall, false);
                 }
             }
@@ -66,10 +78,7 @@ public class AbstractAggregateFunDef extends FunDefBase {
      * @param evaluator current evaluation context
      * @return list of evaluated members or tuples
      */
-    protected static TupleList evaluateCurrentList(
-        ListCalc listCalc,
-        Evaluator evaluator)
-    {
+    protected static TupleList evaluateCurrentList(ListCalc listCalc, Evaluator evaluator) {
         final int savepoint = evaluator.savepoint();
         TupleList tuples;
         try {
@@ -78,7 +87,7 @@ public class AbstractAggregateFunDef extends FunDefBase {
         } finally {
             evaluator.restore(savepoint);
         }
-        int currLen = tuples.size();
+        final int currLen = tuples.size();
         TupleList dims;
         try {
             dims = processUnrelatedDimensions(tuples, evaluator);
@@ -89,12 +98,9 @@ public class AbstractAggregateFunDef extends FunDefBase {
         return dims;
     }
 
-    protected TupleIterable evaluateCurrentIterable(
-        IterCalc iterCalc,
-        Evaluator evaluator)
-    {
+    protected TupleIterable evaluateCurrentIterable(IterCalc iterCalc, Evaluator evaluator) {
         final int savepoint = evaluator.savepoint();
-        int currLen = 0;
+        final int currLen = 0;
         TupleIterable iterable;
         try {
             evaluator.setNonEmpty(false);
@@ -107,13 +113,11 @@ public class AbstractAggregateFunDef extends FunDefBase {
     }
 
     private static void crossProd(Evaluator evaluator, int currLen) {
-        long iterationLimit =
-            MondrianProperties.instance().IterationLimit.get();
+        final long iterationLimit = MondrianProperties.instance().IterationLimit.get();
         final int productLen = currLen * evaluator.getIterationLength();
         if (iterationLimit > 0) {
             if (productLen > iterationLimit) {
-                throw MondrianResource.instance()
-                    .IterationLimitExceeded.ex(iterationLimit);
+                throw MondrianResource.instance().IterationLimitExceeded.ex(iterationLimit);
             }
         }
         evaluator.setIterationLength(currLen);
@@ -134,37 +138,28 @@ public class AbstractAggregateFunDef extends FunDefBase {
      * @param evaluator Evaluator
      * @return list of members or tuples
      */
-    public static TupleList processUnrelatedDimensions(
-        TupleList tuplesForAggregation,
-        Evaluator evaluator)
-    {
+    public static TupleList processUnrelatedDimensions(TupleList tuplesForAggregation, Evaluator evaluator) {
         if (tuplesForAggregation.size() == 0) {
             return tuplesForAggregation;
         }
 
-        RolapMember measure = getRolapMeasureForUnrelatedDimCheck(
-            evaluator, tuplesForAggregation);
+        final RolapMember measure = getRolapMeasureForUnrelatedDimCheck(evaluator, tuplesForAggregation);
 
         if (measure.isCalculated()) {
             return tuplesForAggregation;
         }
 
-        RolapCube virtualCube = (RolapCube) evaluator.getCube();
+        final RolapCube virtualCube = (RolapCube) evaluator.getCube();
         if (virtualCube.isVirtual()) {
             // this should be a safe cast since we've eliminated calcs above
-            RolapCube baseCube = ((RolapStoredMeasure)measure).getCube();
+            final RolapCube baseCube = ((RolapStoredMeasure) measure).getCube();
             if (baseCube == null) {
                 return tuplesForAggregation;
             }
-            if (virtualCube.shouldIgnoreUnrelatedDimensions(baseCube.getName()))
-            {
-                return ignoreUnrelatedDimensions(
-                    tuplesForAggregation, baseCube);
-            } else if (MondrianProperties.instance()
-                .IgnoreMeasureForNonJoiningDimension.get())
-            {
-                return ignoreMeasureForNonJoiningDimension(
-                    tuplesForAggregation, baseCube);
+            if (virtualCube.shouldIgnoreUnrelatedDimensions(baseCube.getName())) {
+                return ignoreUnrelatedDimensions(tuplesForAggregation, baseCube);
+            } else if (MondrianProperties.instance().IgnoreMeasureForNonJoiningDimension.get()) {
+                return ignoreMeasureForNonJoiningDimension(tuplesForAggregation, baseCube);
             }
         }
         return tuplesForAggregation;
@@ -180,21 +175,17 @@ public class AbstractAggregateFunDef extends FunDefBase {
      *      e.g. Aggregate( Crossjoin( {Time.[1997]}, {measures.[Unit Sales]})
      * In both cases the measure(s) will be present in tuplesForAggregation.
      */
-    private static RolapMember getRolapMeasureForUnrelatedDimCheck(
-        Evaluator evaluator, TupleList tuplesForAggregation)
-    {
-        RolapMember measure = (RolapMember)evaluator.getMembers()[0];
-        if (tuplesForAggregation != null
-            && tuplesForAggregation.size() > 0)
-        {
+    private static RolapMember getRolapMeasureForUnrelatedDimCheck(Evaluator evaluator, TupleList tuplesForAggregation) {
+        RolapMember measure = (RolapMember) evaluator.getMembers()[0];
+        if ((tuplesForAggregation != null) && (tuplesForAggregation.size() > 0)) {
             // this looks for the measure in the first tuple, with the
             // assumption that there is a single measure in all tuples.
             // This assumption is incorrect in the unusual case where
             // a set of measures is used as the first param in an aggregate
             // function.
-            for (Member tupMember : tuplesForAggregation.get(0)) {
+            for (final Member tupMember : tuplesForAggregation.get(0)) {
                 if (tupMember.isMeasure()) {
-                    measure = (RolapMember)tupMember;
+                    measure = (RolapMember) tupMember;
                 }
             }
         }
@@ -210,12 +201,8 @@ public class AbstractAggregateFunDef extends FunDefBase {
      * @param baseCube the cube to scan for nonjoining dimensions.
      * @return list of members or tuples
      */
-    private static TupleList ignoreMeasureForNonJoiningDimension(
-        TupleList tuplesForAggregation,
-        RolapCube baseCube)
-    {
-        Set<Dimension> nonJoiningDimensions =
-            nonJoiningDimensions(baseCube, tuplesForAggregation);
+    private static TupleList ignoreMeasureForNonJoiningDimension(TupleList tuplesForAggregation, RolapCube baseCube) {
+        final Set<Dimension> nonJoiningDimensions = nonJoiningDimensions(baseCube, tuplesForAggregation);
         if (nonJoiningDimensions.size() > 0) {
             return TupleCollections.emptyList(tuplesForAggregation.getArity());
         }
@@ -231,15 +218,10 @@ public class AbstractAggregateFunDef extends FunDefBase {
      * computing the aggregate
      * @return list of members or tuples
      */
-    private static TupleList ignoreUnrelatedDimensions(
-        TupleList tuplesForAggregation,
-        RolapCube baseCube)
-    {
-        Set<Dimension> nonJoiningDimensions =
-            nonJoiningDimensions(baseCube, tuplesForAggregation);
-        final Set<List<Member>> processedTuples =
-            new LinkedHashSet<List<Member>>(tuplesForAggregation.size());
-        for (List<Member> tuple : tuplesForAggregation) {
+    private static TupleList ignoreUnrelatedDimensions(TupleList tuplesForAggregation, RolapCube baseCube) {
+        final Set<Dimension> nonJoiningDimensions = nonJoiningDimensions(baseCube, tuplesForAggregation);
+        final Set<List<Member>> processedTuples = new LinkedHashSet<List<Member>>(tuplesForAggregation.size());
+        for (final List<Member> tuple : tuplesForAggregation) {
             List<Member> tupleCopy = tuple;
             for (int j = 0; j < tuple.size(); j++) {
                 final Member member = tuple.get(j);
@@ -248,8 +230,7 @@ public class AbstractAggregateFunDef extends FunDefBase {
                         // Avoid making a copy until we have to change a tuple.
                         tupleCopy = new ArrayList<Member>(tuple);
                     }
-                    final Hierarchy hierarchy =
-                        member.getDimension().getHierarchy();
+                    final Hierarchy hierarchy = member.getDimension().getHierarchy();
                     if (hierarchy.hasAll()) {
                         tupleCopy.set(j, hierarchy.getAllMember());
                     } else {
@@ -259,19 +240,12 @@ public class AbstractAggregateFunDef extends FunDefBase {
             }
             processedTuples.add(tupleCopy);
         }
-        return new DelegatingTupleList(
-            tuplesForAggregation.getArity(),
-            new ArrayList<List<Member>>(
-                processedTuples));
+        return new DelegatingTupleList(tuplesForAggregation.getArity(), new ArrayList<List<Member>>(processedTuples));
     }
 
-    private static Set<Dimension> nonJoiningDimensions(
-        RolapCube baseCube,
-        TupleList tuplesForAggregation)
-    {
-        List<Member> tuple = tuplesForAggregation.get(0);
-        return baseCube.nonJoiningDimensions(
-            tuple.toArray(new Member[tuple.size()]));
+    private static Set<Dimension> nonJoiningDimensions(RolapCube baseCube, TupleList tuplesForAggregation) {
+        final List<Member> tuple = tuplesForAggregation.get(0);
+        return baseCube.nonJoiningDimensions(tuple.toArray(new Member[tuple.size()]));
     }
 }
 

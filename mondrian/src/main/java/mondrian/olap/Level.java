@@ -11,8 +11,6 @@
 
 package mondrian.olap;
 
-import mondrian.spi.MemberFormatter;
-
 /**
  * A <code>Level</code> is a group of {@link Member}s in a {@link Hierarchy},
  * all with the same attributes and at the same depth in the hierarchy.
@@ -33,13 +31,14 @@ public interface Level extends OlapElement, Annotated {
      * the depth of its level.
      */
     int getDepth();
+    @Override
     Hierarchy getHierarchy();
 
     Level getChildLevel();
     Level getParentLevel();
     boolean isAll();
     boolean areMembersUnique();
-    LevelType getLevelType();
+    org.olap4j.metadata.Level.Type getLevelType();
 
     /** Returns properties defined against this level. */
     Property[] getProperties();
@@ -49,7 +48,7 @@ public interface Level extends OlapElement, Annotated {
     /**
       * Returns the object that is used to format members of this level.
       */
-    MemberFormatter getMemberFormatter();
+    mondrian.spi.MemberFormatter getMemberFormatter();
 
     /**
      * Returns the approximate number of members in this level, or

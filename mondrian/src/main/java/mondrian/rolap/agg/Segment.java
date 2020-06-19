@@ -13,15 +13,6 @@
 
 package mondrian.rolap.agg;
 
-import mondrian.olap.Util;
-import mondrian.rolap.*;
-import mondrian.spi.SegmentHeader;
-
-import org.apache.log4j.Logger;
-
-import java.io.PrintWriter;
-import java.util.*;
-
 /**
  * A <code>Segment</code> is a collection of cell values parameterized by
  * a measure, and a set of (column, value) pairs. An example of a segment is</p>
@@ -82,51 +73,45 @@ public class Segment {
      * This is set in the load method and is used during
      * the processing of a particular aggregate load.
      */
-    protected final RolapStar.Column[] columns;
+    protected final mondrian.rolap.RolapStar.Column[] columns;
 
-    public final RolapStar.Measure measure;
+    public final mondrian.rolap.RolapStar.Measure measure;
 
     /**
      * An array of axes, one for each constraining column, containing the values
      * returned for that constraining column.
      */
-    public final StarColumnPredicate[] predicates;
+    public final mondrian.rolap.StarColumnPredicate[] predicates;
 
-    protected final RolapStar star;
-    protected final BitKey constrainedColumnsBitKey;
+    protected final mondrian.rolap.RolapStar star;
+    protected final mondrian.rolap.BitKey constrainedColumnsBitKey;
 
     /**
-     * List of regions to ignore when reading this segment. This list is
+     * java.util.List of regions to ignore when reading this segment. This list is
      * populated when a region is flushed. The cells for these regions may be
      * physically in the segment, because trimming segments can be expensive,
      * but should still be ignored.
      */
-    protected final List<ExcludedRegion> excludedRegions;
+    protected final java.util.List<ExcludedRegion> excludedRegions;
 
     private final int aggregationKeyHashCode;
-    protected final List<StarPredicate> compoundPredicateList;
+    protected final java.util.List<mondrian.rolap.StarPredicate> compoundPredicateList;
 
-    private final SegmentHeader segmentHeader;
+    private final mondrian.spi.SegmentHeader segmentHeader;
 
-    private static final Logger LOGGER = Logger.getLogger(Segment.class);
+    private static final org.apache.log4j.Logger LOGGER = org.apache.log4j.Logger.getLogger(Segment.class);
 
     /**
      * Creates a <code>Segment</code>; it's not loaded yet.
      *
      * @param star Star that this Segment belongs to
      * @param measure Measure whose values this Segment contains
-     * @param predicates List of predicates constraining each axis
-     * @param excludedRegions List of regions which are not in this segment.
+     * @param predicates java.util.List of predicates constraining each axis
+     * @param excludedRegions java.util.List of regions which are not in this segment.
      */
-    public Segment(
-        RolapStar star,
-        BitKey constrainedColumnsBitKey,
-        RolapStar.Column[] columns,
-        RolapStar.Measure measure,
-        StarColumnPredicate[] predicates,
-        List<ExcludedRegion> excludedRegions,
-        final List<StarPredicate> compoundPredicateList)
-    {
+    public Segment(mondrian.rolap.RolapStar star, mondrian.rolap.BitKey constrainedColumnsBitKey, mondrian.rolap.RolapStar.Column[] columns,
+        mondrian.rolap.RolapStar.Measure measure, mondrian.rolap.StarColumnPredicate[] predicates,
+        java.util.List<ExcludedRegion> excludedRegions, final java.util.List<mondrian.rolap.StarPredicate> compoundPredicateList) {
         this.id = nextId++;
         this.star = star;
         this.constrainedColumnsBitKey = constrainedColumnsBitKey;
@@ -135,70 +120,65 @@ public class Segment {
         this.predicates = predicates;
         this.excludedRegions = excludedRegions;
         this.compoundPredicateList = compoundPredicateList;
-        final List<BitKey> compoundPredicateBitKeys =
-            compoundPredicateList == null
-                ? null
-                : new AbstractList<BitKey>() {
-                    public BitKey get(int index) {
-                        return compoundPredicateList.get(index)
-                            .getConstrainedColumnBitKey();
-                    }
+        final java.util.List<mondrian.rolap.BitKey> compoundPredicateBitKeys = compoundPredicateList == null ? null
+            : new java.util.AbstractList<mondrian.rolap.BitKey>() {
+                @Override
+                public mondrian.rolap.BitKey get(int index) {
+                    return compoundPredicateList.get(index).getConstrainedColumnBitKey();
+                }
 
-                    public int size() {
-                        return compoundPredicateList.size();
-                    }
-                };
-        this.aggregationKeyHashCode =
-            AggregationKey.computeHashCode(
-                constrainedColumnsBitKey,
-                star,
-                compoundPredicateBitKeys);
+                @Override
+                public int size() {
+                    return compoundPredicateList.size();
+                }
+            };
+        this.aggregationKeyHashCode = AggregationKey.computeHashCode(constrainedColumnsBitKey, star, compoundPredicateBitKeys);
         this.segmentHeader = SegmentBuilder.toHeader(this);
     }
 
     /**
      * Returns the constrained columns.
      */
-    public RolapStar.Column[] getColumns() {
-        return columns;
+    public mondrian.rolap.RolapStar.Column[] getColumns() {
+        return this.columns;
     }
 
     /**
      * Returns the star.
      */
-    public RolapStar getStar() {
-        return star;
+    public mondrian.rolap.RolapStar getStar() {
+        return this.star;
     }
 
     /**
      * Returns the list of compound predicates.
      */
-    public List<StarPredicate> getCompoundPredicateList() {
-        return compoundPredicateList;
+    public java.util.List<mondrian.rolap.StarPredicate> getCompoundPredicateList() {
+        return this.compoundPredicateList;
     }
 
     /**
      * Returns the BitKey for ALL columns (Measures and Levels) involved in the
      * query.
      */
-    public BitKey getConstrainedColumnsBitKey() {
-        return constrainedColumnsBitKey;
+    public mondrian.rolap.BitKey getConstrainedColumnsBitKey() {
+        return this.constrainedColumnsBitKey;
     }
 
     private void describe(StringBuilder buf, boolean values) {
-        final String sep = Util.nl + "    ";
-        buf.append(printSegmentHeaderInfo(sep));
+        final String sep = mondrian.olap.Util.nl + "    ";
+        buf.append(this.printSegmentHeaderInfo(sep));
 
-        for (int i = 0; i < columns.length; i++) {
+        for (int i = 0; i < this.columns.length; i++) {
             buf.append(sep);
-            buf.append(columns[i].getExpression().getGenericExpression());
-            describeAxes(buf, i, values);
+            buf.append(this.columns[i].getExpression().getGenericExpression());
+            this.describeAxes(buf, i, values);
         }
-        if (!excludedRegions.isEmpty()) {
+        if (!this.excludedRegions.isEmpty()) {
             buf.append(sep);
             buf.append("excluded={");
             int k = 0;
-            for (ExcludedRegion excludedRegion : excludedRegions) {
+            for (final ExcludedRegion excludedRegion : this.excludedRegions) {
                 if (k++ > 0) {
                     buf.append(", ");
                 }
@@ -210,28 +190,27 @@ public class Segment {
     }
 
     protected void describeAxes(StringBuilder buf, int i, boolean values) {
-        predicates[i].describe(buf);
+        this.predicates[i].describe(buf);
     }
 
     private String printSegmentHeaderInfo(String sep) {
-        StringBuilder buf = new StringBuilder();
+        final StringBuilder buf = new StringBuilder();
         buf.append("Segment #");
-        buf.append(id);
+        buf.append(this.id);
         buf.append(" {");
         buf.append(sep);
         buf.append("measure=");
-        buf.append(
-            measure.getExpression() == null
-                ? measure.getAggregator().getExpression("*")
-                : measure.getAggregator().getExpression(
-                    measure.getExpression().getGenericExpression()));
+        buf
+            .append(this.measure.getExpression() == null ? this.measure.getAggregator().getExpression("*")
+                : this.measure.getAggregator().getExpression(this.measure.getExpression().getGenericExpression()));
         return buf.toString();
     }
 
+    @Override
     public String toString() {
         if (this.desc == null) {
-            StringBuilder buf = new StringBuilder(64);
-            describe(buf, false);
+            final StringBuilder buf = new StringBuilder(64);
+            this.describe(buf, false);
             this.desc = buf.toString();
         }
         return this.desc;
@@ -242,10 +221,10 @@ public class Segment {
      */
     protected final boolean isExcluded(Object[] keys) {
         // Performance critical: cannot use foreach
-        final int n = excludedRegions.size();
+        final int n = this.excludedRegions.size();
         //noinspection ForLoopReplaceableByForEach
         for (int i = 0; i < n; i++) {
-            ExcludedRegion excludedRegion = excludedRegions.get(i);
+            final ExcludedRegion excludedRegion = this.excludedRegions.get(i);
             if (excludedRegion.wouldContain(keys)) {
                 return true;
             }
@@ -259,59 +238,49 @@ public class Segment {
      *
      * @param pw Writer
      */
-    public void print(PrintWriter pw) {
+    public void print(java.io.PrintWriter pw) {
         final StringBuilder buf = new StringBuilder();
-        describe(buf, true);
+        this.describe(buf, true);
         pw.print(buf.toString());
         pw.println();
     }
 
-    public List<ExcludedRegion> getExcludedRegions() {
-        return excludedRegions;
+    public java.util.List<ExcludedRegion> getExcludedRegions() {
+        return this.excludedRegions;
     }
 
-    SegmentDataset createDataset(
-        SegmentAxis[] axes,
-        boolean sparse,
-        SqlStatement.Type type,
-        int size)
-    {
+    SegmentDataset createDataset(SegmentAxis[] axes, boolean sparse, mondrian.rolap.SqlStatement.Type newType, int newSize) {
         if (sparse) {
             return new SparseSegmentDataset();
         } else {
-            switch (type) {
-            case OBJECT:
-            case LONG:
-            case STRING:
-                return new DenseObjectSegmentDataset(axes, size);
-            case INT:
-                return new DenseIntSegmentDataset(axes, size);
-            case DOUBLE:
-                return new DenseDoubleSegmentDataset(axes, size);
-            default:
-                throw Util.unexpected(type);
+            switch (newType) {
+                case OBJECT:
+                case LONG:
+                case STRING:
+                    return new DenseObjectSegmentDataset(axes, newSize);
+                case INT:
+                    return new DenseIntSegmentDataset(axes, newSize);
+                case DOUBLE:
+                    return new DenseDoubleSegmentDataset(axes, newSize);
+                case DATE:
+                case TIMESTAMP:
+                case TIME:
+                    return new DenseObjectSegmentDataset(axes, newSize);
+                default:
+                    throw mondrian.olap.Util.unexpected(newType);
             }
         }
     }
 
-    public boolean matches(
-        AggregationKey aggregationKey,
-        RolapStar.Measure measure)
-    {
+    public boolean matches(AggregationKey aggregationKey, mondrian.rolap.RolapStar.Measure measure) {
         // Perform high-selectivity comparisons first.
-        return aggregationKeyHashCode == aggregationKey.hashCode()
-            && this.measure == measure
-            && matchesInternal(aggregationKey);
+        return (this.aggregationKeyHashCode == aggregationKey.hashCode()) && (this.measure == measure)
+            && this.matchesInternal(aggregationKey);
     }
 
     private boolean matchesInternal(AggregationKey aggKey) {
-        return
-            constrainedColumnsBitKey.equals(
-                aggKey.getConstrainedColumnsBitKey())
-            && star.equals(aggKey.getStar())
-            && AggregationKey.equal(
-                compoundPredicateList,
-                aggKey.compoundPredicateList);
+        return this.constrainedColumnsBitKey.equals(aggKey.getConstrainedColumnsBitKey()) && this.star.equals(aggKey.getStar())
+            && AggregationKey.equal(this.compoundPredicateList, aggKey.compoundPredicateList);
     }
 
     /**
@@ -341,7 +310,7 @@ public class Segment {
         public int getCellCount();
     }
 
-    public SegmentHeader getHeader() {
+    public mondrian.spi.SegmentHeader getHeader() {
         return this.segmentHeader;
     }
 }

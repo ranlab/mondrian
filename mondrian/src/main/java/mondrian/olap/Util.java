@@ -10,46 +10,102 @@
 */
 package mondrian.olap;
 
-import mondrian.mdx.*;
-import mondrian.olap.fun.FunUtil;
-import mondrian.olap.fun.Resolver;
-import mondrian.olap.type.Type;
-import mondrian.resource.MondrianResource;
-import mondrian.rolap.*;
-import mondrian.spi.UserDefinedFunction;
-import mondrian.util.*;
-
-import org.apache.commons.collections.keyvalue.AbstractMapEntry;
-import org.apache.commons.io.IOUtils;
-import org.apache.commons.vfs2.FileContent;
-import org.apache.commons.vfs2.FileObject;
-import org.apache.commons.vfs2.FileSystemException;
-import org.apache.commons.vfs2.FileSystemManager;
-import org.apache.commons.vfs2.VFS;
-import org.apache.commons.vfs2.provider.http.HttpFileObject;
-import org.apache.log4j.Logger;
-
-import org.eigenbase.xom.XOMUtil;
-
-import org.olap4j.impl.Olap4jUtil;
-import org.olap4j.mdx.*;
-
-import java.io.*;
+import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.PrintWriter;
+import java.io.Reader;
+import java.io.Serializable;
+import java.io.StringWriter;
 import java.lang.ref.Reference;
-import java.lang.reflect.*;
 import java.lang.reflect.Array;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.math.BigDecimal;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.sql.*;
 import java.sql.Connection;
-import java.util.*;
-import java.util.concurrent.*;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.AbstractList;
+import java.util.AbstractMap;
+import java.util.AbstractSet;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.BitSet;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.Enumeration;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.ListIterator;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Properties;
+import java.util.Random;
+import java.util.RandomAccess;
+import java.util.Set;
+import java.util.SortedSet;
+import java.util.Timer;
+import java.util.TreeSet;
+import java.util.UUID;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RejectedExecutionHandler;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import org.apache.log4j.Logger;
+import org.eigenbase.xom.XOMUtil;
+import org.olap4j.impl.Olap4jUtil;
+import org.olap4j.mdx.IdentifierNode;
+import org.olap4j.mdx.IdentifierSegment;
+import org.olap4j.mdx.KeySegment;
+import org.olap4j.mdx.NameSegment;
+import org.olap4j.mdx.Quoting;
+
+import mondrian.mdx.DimensionExpr;
+import mondrian.mdx.HierarchyExpr;
+import mondrian.mdx.LevelExpr;
+import mondrian.mdx.MemberExpr;
+import mondrian.mdx.NamedSetExpr;
+import mondrian.mdx.ParameterExpr;
+import mondrian.mdx.QueryPrintWriter;
+import mondrian.mdx.ResolvedFunCall;
+import mondrian.mdx.UnresolvedFunCall;
+import mondrian.olap.fun.FunUtil;
+import mondrian.olap.fun.Resolver;
+import mondrian.olap.type.Type;
+import mondrian.resource.MondrianResource;
+import mondrian.rolap.RolapCube;
+import mondrian.rolap.RolapCubeDimension;
+import mondrian.rolap.RolapLevel;
+import mondrian.rolap.RolapMember;
+import mondrian.rolap.RolapUtil;
+import mondrian.spi.UserDefinedFunction;
+import mondrian.util.ArraySortedSet;
+import mondrian.util.ConcatenableList;
+import mondrian.util.Pair;
+import mondrian.util.UtilCompatible;
+import mondrian.util.UtilCompatibleJdk16;
 
 /**
  * Utility functions used throughout mondrian. All methods are static.
@@ -82,8 +138,7 @@ public class Util extends XOMUtil {
      * Random number generator to provide seed for other random number
      * generators.
      */
-    private static final Random metaRandom =
-            createRandom(MondrianProperties.instance().TestSeed.get());
+    private static final Random metaRandom = createRandom(mondrian.olap.MondrianProperties.instance().TestSeed.get());
 
     /** Unique id for this JVM instance. Part of a key that ensures that if
      * two JVMs in the same cluster have a data-source with the same
@@ -94,9 +149,7 @@ public class Util extends XOMUtil {
     /**
      * Whether this is an IBM JVM.
      */
-    public static final boolean IBM_JVM =
-        System.getProperties().getProperty("java.vendor").equals(
-            "IBM Corporation");
+    public static final boolean IBM_JVM = System.getProperties().getProperty("java.vendor").equals("IBM Corporation");
 
     /**
      * What version of JDBC?
@@ -106,12 +159,8 @@ public class Util extends XOMUtil {
      *     <li>0x0300 otherwise</li>
      * </ul>
      */
-    public static final int JdbcVersion =
-        System.getProperty("java.version").compareTo("1.7") >= 0
-            ? 0x0401
-            : System.getProperty("java.version").compareTo("1.6") >= 0
-            ? 0x0400
-            : 0x0300;
+    public static final int JdbcVersion = System.getProperty("java.version").compareTo("1.7") >= 0 ? 0x0401
+        : System.getProperty("java.version").compareTo("1.6") >= 0 ? 0x0400 : 0x0300;
 
     /**
      * Whether the code base has re-engineered using retroweaver.
@@ -119,9 +168,10 @@ public class Util extends XOMUtil {
      * things are available via {@link mondrian.util.UtilCompatible}.
      * Retroweaver has some problems involving {@link java.util.EnumSet}.
      */
-    public static final boolean Retrowoven =
-        Access.class.getSuperclass().getName().equals(
-            "net.sourceforge.retroweaver.runtime.java.lang.Enum");
+    public static final boolean Retrowoven = Access.class
+        .getSuperclass()
+            .getName()
+            .equals("net.sourceforge.retroweaver.runtime.java.lang.Enum");
 
     private static final UtilCompatible compatible;
 
@@ -137,7 +187,7 @@ public class Util extends XOMUtil {
     }
 
     public static boolean isNull(Object o) {
-        return o == null || o == nullValue;
+        return (o == null) || (o == nullValue);
     }
 
     /**
@@ -148,10 +198,8 @@ public class Util extends XOMUtil {
      */
     public static <T> boolean isSorted(List<T> list) {
         T prev = null;
-        for (T t : list) {
-            if (prev != null
-                && ((Comparable<T>) prev).compareTo(t) >= 0)
-            {
+        for (final T t : list) {
+            if ((prev != null) && (((Comparable<T>) prev).compareTo(t) >= 0)) {
                 return false;
             }
             prev = t;
@@ -169,7 +217,7 @@ public class Util extends XOMUtil {
         final MessageDigest algorithm;
         try {
             algorithm = MessageDigest.getInstance("SHA-256");
-        } catch (NoSuchAlgorithmException e) {
+        } catch (final NoSuchAlgorithmException e) {
             throw new RuntimeException(e);
         }
         return algorithm.digest(value.getBytes());
@@ -185,7 +233,7 @@ public class Util extends XOMUtil {
         final MessageDigest algorithm;
         try {
             algorithm = MessageDigest.getInstance("MD5");
-        } catch (NoSuchAlgorithmException e) {
+        } catch (final NoSuchAlgorithmException e) {
             throw new RuntimeException(e);
         }
         return algorithm.digest(value.getBytes());
@@ -204,51 +252,41 @@ public class Util extends XOMUtil {
      * @param rejectionPolicy The rejection policy to enforce.
      * @return An executor service preconfigured.
      */
-    public static ExecutorService getExecutorService(
-        int maximumPoolSize,
+    public static ExecutorService getExecutorService(int maximumPoolSize,
         int corePoolSize,
         long keepAliveTime,
         final String name,
-        RejectedExecutionHandler rejectionPolicy)
-    {
+        RejectedExecutionHandler rejectionPolicy) {
         // We must create a factory where the threads
         // have the right name and are marked as daemon threads.
-        final ThreadFactory factory =
-            new ThreadFactory() {
-                private final AtomicInteger counter = new AtomicInteger(0);
-                public Thread newThread(Runnable r) {
-                    final Thread t =
-                        Executors.defaultThreadFactory().newThread(r);
-                    t.setDaemon(true);
-                    t.setName(name + '_' + counter.incrementAndGet());
-                    return t;
-                }
-            };
+        final ThreadFactory factory = new ThreadFactory() {
+            private final AtomicInteger counter = new AtomicInteger(0);
+
+            @Override
+            public Thread newThread(Runnable r) {
+                final Thread t = Executors.defaultThreadFactory().newThread(r);
+                t.setDaemon(true);
+                t.setName(name + '_' + this.counter.incrementAndGet());
+                return t;
+            }
+        };
 
         // Ok, create the executor
-        final ThreadPoolExecutor executor =
-            new ThreadPoolExecutor(
-                corePoolSize,
-                maximumPoolSize > 0
-                    ? maximumPoolSize
-                    : Integer.MAX_VALUE,
-                keepAliveTime,
-                TimeUnit.SECONDS,
-                // we use a sync queue. any other type of queue
-                // will prevent the tasks from running concurrently
-                // because the executors API requires blocking queues.
-                // Important to pass true here. This makes the
-                // order of tasks deterministic.
-                // TODO Write a non-blocking queue which implements
-                // the blocking queue API so we can pass that to the
-                // executor.
-                new LinkedBlockingQueue<Runnable>(),
-                factory);
+        final ThreadPoolExecutor executor = new ThreadPoolExecutor(corePoolSize, maximumPoolSize > 0 ? maximumPoolSize : Integer.MAX_VALUE,
+            keepAliveTime, TimeUnit.SECONDS,
+            // we use a sync queue. any other type of queue
+            // will prevent the tasks from running concurrently
+            // because the executors API requires blocking queues.
+            // Important to pass true here. This makes the
+            // order of tasks deterministic.
+            // TODO Write a non-blocking queue which implements
+            // the blocking queue API so we can pass that to the
+            // executor.
+            new LinkedBlockingQueue<Runnable>(), factory);
 
         // Set the rejection policy if required.
         if (rejectionPolicy != null) {
-            executor.setRejectedExecutionHandler(
-                rejectionPolicy);
+            executor.setRejectedExecutionHandler(rejectionPolicy);
         }
 
         // Done
@@ -263,23 +301,18 @@ public class Util extends XOMUtil {
      * @param name The name of the threads.
      * @return An scheduled executor service preconfigured.
      */
-    public static ScheduledExecutorService getScheduledExecutorService(
-        final int maxNbThreads,
-        final String name)
-    {
-        return Executors.newScheduledThreadPool(
-            maxNbThreads,
-            new ThreadFactory() {
-                final AtomicInteger counter = new AtomicInteger(0);
-                public Thread newThread(Runnable r) {
-                    final Thread thread =
-                        Executors.defaultThreadFactory().newThread(r);
-                    thread.setDaemon(true);
-                    thread.setName(name + '_' + counter.incrementAndGet());
-                    return thread;
-                }
+    public static ScheduledExecutorService getScheduledExecutorService(final int maxNbThreads, final String name) {
+        return Executors.newScheduledThreadPool(maxNbThreads, new ThreadFactory() {
+            final AtomicInteger counter = new AtomicInteger(0);
+
+            @Override
+            public Thread newThread(Runnable r) {
+                final Thread thread = Executors.defaultThreadFactory().newThread(r);
+                thread.setDaemon(true);
+                thread.setName(name + '_' + this.counter.incrementAndGet());
+                return thread;
             }
-        );
+        });
     }
 
     /**
@@ -287,14 +320,12 @@ public class Util extends XOMUtil {
      *
      * @deprecated Will be removed in 4.0
      */
+    @Deprecated
     public static String mdxEncodeString(String st) {
-        StringBuilder retString = new StringBuilder(st.length() + 20);
+        final StringBuilder retString = new StringBuilder(st.length() + 20);
         for (int i = 0; i < st.length(); i++) {
-            char c = st.charAt(i);
-            if ((c == ']')
-                && ((i + 1) < st.length())
-                && (st.charAt(i + 1) != '.'))
-            {
+            final char c = st.charAt(i);
+            if ((c == ']') && ((i + 1) < st.length()) && (st.charAt(i + 1) != '.')) {
                 retString.append(']'); // escaping character
             }
             retString.append(c);
@@ -306,7 +337,7 @@ public class Util extends XOMUtil {
      * Converts a string into a double-quoted string.
      */
     public static String quoteForMdx(String val) {
-        StringBuilder buf = new StringBuilder(val.length() + 20);
+        final StringBuilder buf = new StringBuilder(val.length() + 20);
         quoteForMdx(buf, val);
         return buf.toString();
     }
@@ -316,7 +347,7 @@ public class Util extends XOMUtil {
      */
     public static StringBuilder quoteForMdx(StringBuilder buf, String val) {
         buf.append("\"");
-        String s0 = replace(val, "\"", "\"\"");
+        final String s0 = replace(val, "\"", "\"\"");
         buf.append(s0);
         buf.append("\"");
         return buf;
@@ -328,14 +359,14 @@ public class Util extends XOMUtil {
      * "[a [bracketed]] string]".
      */
     public static String quoteMdxIdentifier(String id) {
-        StringBuilder buf = new StringBuilder(id.length() + 20);
+        final StringBuilder buf = new StringBuilder(id.length() + 20);
         quoteMdxIdentifier(id, buf);
         return buf.toString();
     }
 
     public static void quoteMdxIdentifier(String id, StringBuilder buf) {
         buf.append('[');
-        int start = buf.length();
+        final int start = buf.length();
         buf.append(id);
         replace(buf, start, "]", "]]");
         buf.append(']');
@@ -346,15 +377,12 @@ public class Util extends XOMUtil {
      * "California"} becomes "[Store].[USA].[California]".
      */
     public static String quoteMdxIdentifier(List<Id.Segment> ids) {
-        StringBuilder sb = new StringBuilder(64);
+        final StringBuilder sb = new StringBuilder(64);
         quoteMdxIdentifier(ids, sb);
         return sb.toString();
     }
 
-    public static void quoteMdxIdentifier(
-        List<Id.Segment> ids,
-        StringBuilder sb)
-    {
+    public static void quoteMdxIdentifier(List<Id.Segment> ids, StringBuilder sb) {
         for (int i = 0; i < ids.size(); i++) {
             if (i > 0) {
                 sb.append('.');
@@ -370,12 +398,7 @@ public class Util extends XOMUtil {
      * @return Quoted string literal
      */
     public static String quoteJavaString(String s) {
-        return s == null
-            ? "null"
-            : "\""
-              + s.replaceAll("\\\\", "\\\\\\\\")
-                .replaceAll("\\\"", "\\\\\"")
-              + "\"";
+        return s == null ? "null" : "\"" + s.replaceAll("\\\\", "\\\\\\\\").replaceAll("\\\"", "\\\\\"") + "\"";
     }
 
     /**
@@ -389,7 +412,7 @@ public class Util extends XOMUtil {
         if (s == t) {
             return true;
         }
-        if (s == null || t == null) {
+        if ((s == null) || (t == null)) {
             return false;
         }
         return s.equals(t);
@@ -399,7 +422,7 @@ public class Util extends XOMUtil {
      * Returns true if two strings are equal, or are both null.
      *
      * <p>The result is not affected by
-     * {@link MondrianProperties#CaseSensitive the case sensitive option}; if
+     * {@link mondrian.olap.MondrianProperties#CaseSensitive the case sensitive option}; if
      * you wish to compare names, use {@link #equalName(String, String)}.
      */
     public static boolean equals(String s, String t) {
@@ -409,15 +432,14 @@ public class Util extends XOMUtil {
     /**
      * Returns whether two names are equal.
      * Takes into account the
-     * {@link MondrianProperties#CaseSensitive case sensitive option}.
+     * {@link mondrian.olap.MondrianProperties#CaseSensitive case sensitive option}.
      * Names may be null.
      */
     public static boolean equalName(String s, String t) {
         if (s == null) {
             return t == null;
         }
-        boolean caseSensitive =
-            MondrianProperties.instance().CaseSensitive.get();
+        final boolean caseSensitive = mondrian.olap.MondrianProperties.instance().CaseSensitive.get();
         return caseSensitive ? s.equals(t) : s.equalsIgnoreCase(t);
     }
 
@@ -436,17 +458,16 @@ public class Util extends XOMUtil {
     /**
      * Compares two names.  if case sensitive flag is false,
      * apply finer grain difference with case sensitive
-     * Takes into account the {@link MondrianProperties#CaseSensitive case
+     * Takes into account the {@link mondrian.olap.MondrianProperties#CaseSensitive case
      * sensitive option}.
      * Names must not be null.
      */
     public static int caseSensitiveCompareName(String s, String t) {
-        boolean caseSensitive =
-            MondrianProperties.instance().CaseSensitive.get();
+        final boolean caseSensitive = mondrian.olap.MondrianProperties.instance().CaseSensitive.get();
         if (caseSensitive) {
             return s.compareTo(t);
         } else {
-            int v = s.compareToIgnoreCase(t);
+            final int v = s.compareToIgnoreCase(t);
             // if ignore case returns 0 compare in a case sensitive manner
             // this was introduced to solve an issue with Member.equals()
             // and Member.compareTo() not agreeing with each other
@@ -456,26 +477,23 @@ public class Util extends XOMUtil {
 
     /**
      * Compares two names.
-     * Takes into account the {@link MondrianProperties#CaseSensitive case
+     * Takes into account the {@link mondrian.olap.MondrianProperties#CaseSensitive case
      * sensitive option}.
      * Names must not be null.
      */
     public static int compareName(String s, String t) {
-        boolean caseSensitive =
-            MondrianProperties.instance().CaseSensitive.get();
+        final boolean caseSensitive = mondrian.olap.MondrianProperties.instance().CaseSensitive.get();
         return caseSensitive ? s.compareTo(t) : s.compareToIgnoreCase(t);
     }
 
     /**
      * Generates a normalized form of a name, for use as a key into a map.
      * Returns the upper case name if
-     * {@link MondrianProperties#CaseSensitive} is true, the name unchanged
+     * {@link mondrian.olap.MondrianProperties#CaseSensitive} is true, the name unchanged
      * otherwise.
      */
     public static String normalizeName(String s) {
-        return MondrianProperties.instance().CaseSensitive.get()
-            ? s
-            : s.toUpperCase();
+        return mondrian.olap.MondrianProperties.instance().CaseSensitive.get() ? s : s.toUpperCase();
     }
 
     /**
@@ -515,9 +533,9 @@ public class Util extends XOMUtil {
         if (found == -1) {
             return s;
         }
-        StringBuilder sb = new StringBuilder(s.length() + 20);
+        final StringBuilder sb = new StringBuilder(s.length() + 20);
         int start = 0;
-        char[] chars = s.toCharArray();
+        final char[] chars = s.toCharArray();
         final int step = find.length();
         if (step == 0) {
             // Special case where find is "".
@@ -549,15 +567,10 @@ public class Util extends XOMUtil {
      * @param replace String to replace it with
      * @return The string buffer
      */
-    public static StringBuilder replace(
-        StringBuilder buf,
-        int start,
-        String find,
-        String replace)
-    {
+    public static StringBuilder replace(StringBuilder buf, int start, String find, String replace) {
         // Search and replace from the end towards the start, to avoid O(n ^ 2)
         // copying if the string occurs very commonly.
-        int findLength = find.length();
+        final int findLength = find.length();
         if (findLength == 0) {
             // Special case where the seek string is empty.
             for (int j = buf.length(); j >= 0; --j) {
@@ -567,7 +580,7 @@ public class Util extends XOMUtil {
         }
         int k = buf.length();
         while (k > 0) {
-            int i = buf.lastIndexOf(find, k);
+            final int i = buf.lastIndexOf(find, k);
             if (i < start) {
                 break;
             }
@@ -586,9 +599,8 @@ public class Util extends XOMUtil {
      * @param s MDX identifier
      * @return List of segments
      */
-    public static List<Id.Segment> parseIdentifier(String s)  {
-        return convert(
-            org.olap4j.impl.IdentifierParser.parseIdentifier(s));
+    public static List<Id.Segment> parseIdentifier(String s) {
+        return convert(org.olap4j.impl.IdentifierParser.parseIdentifier(s));
     }
 
     /**
@@ -596,7 +608,7 @@ public class Util extends XOMUtil {
      * "[part1].[part2]". If the names contain "]" they are escaped as "]]".
      */
     public static String implode(List<Id.Segment> names) {
-        StringBuilder sb = new StringBuilder(64);
+        final StringBuilder sb = new StringBuilder(64);
         for (int i = 0; i < names.size(); i++) {
             if (i > 0) {
                 sb.append(".");
@@ -606,8 +618,8 @@ public class Util extends XOMUtil {
             // but that causes some tests to fail
             Id.Segment segment = names.get(i);
             switch (segment.getQuoting()) {
-            case UNQUOTED:
-                segment = new Id.NameSegment(((Id.NameSegment) segment).name);
+                case UNQUOTED:
+                    segment = new Id.NameSegment(((Id.NameSegment) segment).name);
             }
             segment.toString(sb);
         }
@@ -622,7 +634,7 @@ public class Util extends XOMUtil {
         if (parent == null) {
             return Util.quoteMdxIdentifier(name);
         } else {
-            StringBuilder buf = new StringBuilder(64);
+            final StringBuilder buf = new StringBuilder(64);
             buf.append(parent.getUniqueName());
             buf.append('.');
             Util.quoteMdxIdentifier(name, buf);
@@ -634,7 +646,7 @@ public class Util extends XOMUtil {
         if (parentUniqueName == null) {
             return quoteMdxIdentifier(name);
         } else {
-            StringBuilder buf = new StringBuilder(64);
+            final StringBuilder buf = new StringBuilder(64);
             buf.append(parentUniqueName);
             buf.append('.');
             Util.quoteMdxIdentifier(name, buf);
@@ -642,16 +654,12 @@ public class Util extends XOMUtil {
         }
     }
 
-    public static OlapElement lookupCompound(
-        SchemaReader schemaReader,
+    public static OlapElement lookupCompound(SchemaReader schemaReader,
         OlapElement parent,
         List<Id.Segment> names,
         boolean failIfNotFound,
-        int category)
-    {
-        return lookupCompound(
-            schemaReader, parent, names, failIfNotFound, category,
-            MatchType.EXACT);
+        int category) {
+        return lookupCompound(schemaReader, parent, names, failIfNotFound, category, MatchType.EXACT);
     }
 
     /**
@@ -673,18 +681,16 @@ public class Util extends XOMUtil {
      *
      * @see #parseIdentifier(String)
      */
-    public static OlapElement lookupCompound(
-        SchemaReader schemaReader,
+    public static OlapElement lookupCompound(SchemaReader schemaReader,
         OlapElement parent,
         List<Id.Segment> names,
         boolean failIfNotFound,
         int category,
-        MatchType matchType)
-    {
+        MatchType matchType) {
         Util.assertPrecondition(parent != null, "parent != null");
 
         if (LOGGER.isDebugEnabled()) {
-            StringBuilder buf = new StringBuilder(64);
+            final StringBuilder buf = new StringBuilder(64);
             buf.append("Util.lookupCompound: ");
             buf.append("parent.name=");
             buf.append(parent.getName());
@@ -698,21 +704,21 @@ public class Util extends XOMUtil {
         // First look up a member from the cache of calculated members
         // (cubes and queries both have them).
         switch (category) {
-        case Category.Member:
-        case Category.Unknown:
-            Member member = schemaReader.getCalculatedMember(names);
-            if (member != null) {
-                return member;
-            }
+            case Category.Member:
+            case Category.Unknown:
+                final Member member = schemaReader.getCalculatedMember(names);
+                if (member != null) {
+                    return member;
+                }
         }
         // Likewise named set.
         switch (category) {
-        case Category.Set:
-        case Category.Unknown:
-            NamedSet namedSet = schemaReader.getNamedSet(names);
-            if (namedSet != null) {
-                return namedSet;
-            }
+            case Category.Set:
+            case Category.Unknown:
+                final NamedSet namedSet = schemaReader.getNamedSet(names);
+                if (namedSet != null) {
+                    return namedSet;
+                }
         }
 
         // Now resolve the name one part at a time.
@@ -722,24 +728,18 @@ public class Util extends XOMUtil {
             if (names.get(i) instanceof Id.NameSegment) {
                 name = (Id.NameSegment) names.get(i);
                 child = schemaReader.getElementChild(parent, name, matchType);
-            } else if (parent instanceof RolapLevel
-                       && names.get(i) instanceof Id.KeySegment
-                       && names.get(i).getKeyParts().size() == 1)
-            {
+            } else if ((parent instanceof RolapLevel) && (names.get(i) instanceof Id.KeySegment)
+                && (names.get(i).getKeyParts().size() == 1)) {
                 // The following code is for SsasCompatibleNaming=false.
                 // Continues the very limited support for key segments in
                 // mondrian-3.x. To be removed in mondrian-4, when
                 // SsasCompatibleNaming=true is the only option.
                 final Id.KeySegment keySegment = (Id.KeySegment) names.get(i);
                 name = keySegment.getKeyParts().get(0);
-                final List<Member> levelMembers =
-                    schemaReader.getLevelMembers(
-                        (Level) parent, false);
+                final List<Member> levelMembers = schemaReader.getLevelMembers((Level) parent, false);
                 child = null;
-                for (Member member : levelMembers) {
-                    if (((RolapMember) member).getKey().toString().equals(
-                            name.getName()))
-                    {
+                for (final Member member : levelMembers) {
+                    if (((RolapMember) member).getKey().toString().equals(name.getName())) {
                         child = member;
                         break;
                     }
@@ -752,20 +752,15 @@ public class Util extends XOMUtil {
             // match, then for an after match, return the first child
             // of each subsequent level; for a before match, return the
             // last child
-            if (child instanceof Member
-                && !matchType.isExact()
-                && !Util.equalName(child.getName(), name.getName()))
-            {
+            if ((child instanceof Member) && !matchType.isExact() && !Util.equalName(child.getName(), name.getName())) {
                 Member bestChild = (Member) child;
                 for (int j = i + 1; j < names.size(); j++) {
-                    List<Member> childrenList =
-                        schemaReader.getMemberChildren(bestChild);
+                    final List<Member> childrenList = schemaReader.getMemberChildren(bestChild);
                     FunUtil.hierarchizeMemberList(childrenList, false);
                     if (matchType == MatchType.AFTER) {
                         bestChild = childrenList.get(0);
                     } else {
-                        bestChild =
-                            childrenList.get(childrenList.size() - 1);
+                        bestChild = childrenList.get(childrenList.size() - 1);
                     }
                     if (bestChild == null) {
                         child = null;
@@ -777,22 +772,15 @@ public class Util extends XOMUtil {
             }
             if (child == null) {
                 if (LOGGER.isDebugEnabled()) {
-                    LOGGER.debug(
-                        "Util.lookupCompound: "
-                        + "parent.name="
-                        + parent.getName()
-                        + " has no child with name="
-                        + name);
+                    LOGGER.debug("Util.lookupCompound: " + "parent.name=" + parent.getName() + " has no child with name=" + name);
                 }
 
                 if (!failIfNotFound) {
                     return null;
                 } else if (category == Category.Member) {
-                    throw MondrianResource.instance().MemberNotFound.ex(
-                        quoteMdxIdentifier(names));
+                    throw MondrianResource.instance().MemberNotFound.ex(quoteMdxIdentifier(names));
                 } else {
-                    throw MondrianResource.instance().MdxChildObjectNotFound
-                        .ex(name.toString(), parent.getQualifiedName());
+                    throw MondrianResource.instance().MdxChildObjectNotFound.ex(name.toString(), parent.getQualifiedName());
                 }
             }
             parent = child;
@@ -801,76 +789,67 @@ public class Util extends XOMUtil {
             }
         }
         if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug(
-                "Util.lookupCompound: "
-                + "found child.name="
-                + parent.getName()
-                + ", child.class="
-                + parent.getClass().getName());
+            LOGGER.debug("Util.lookupCompound: " + "found child.name=" + parent.getName() + ", child.class=" + parent.getClass().getName());
         }
 
         switch (category) {
-        case Category.Dimension:
-            if (parent instanceof Dimension) {
+            case Category.Dimension:
+                if (parent instanceof Dimension) {
+                    return parent;
+                } else if (parent instanceof Hierarchy) {
+                    return parent.getDimension();
+                } else if (failIfNotFound) {
+                    throw Util.newError("Can not find dimension '" + implode(names) + "'");
+                } else {
+                    return null;
+                }
+            case Category.Hierarchy:
+                if (parent instanceof Hierarchy) {
+                    return parent;
+                } else if (parent instanceof Dimension) {
+                    return parent.getHierarchy();
+                } else if (failIfNotFound) {
+                    throw Util.newError("Can not find hierarchy '" + implode(names) + "'");
+                } else {
+                    return null;
+                }
+            case Category.Level:
+                if (parent instanceof Level) {
+                    return parent;
+                } else if (failIfNotFound) {
+                    throw Util.newError("Can not find level '" + implode(names) + "'");
+                } else {
+                    return null;
+                }
+            case Category.Member:
+                if (parent instanceof Member) {
+                    return parent;
+                } else if (failIfNotFound) {
+                    throw MondrianResource.instance().MdxCantFindMember.ex(implode(names));
+                } else {
+                    return null;
+                }
+            case Category.Unknown:
+                assertPostcondition(parent != null, "return != null");
                 return parent;
-            } else if (parent instanceof Hierarchy) {
-                return parent.getDimension();
-            } else if (failIfNotFound) {
-                throw Util.newError(
-                    "Can not find dimension '" + implode(names) + "'");
-            } else {
-                return null;
-            }
-        case Category.Hierarchy:
-            if (parent instanceof Hierarchy) {
-                return parent;
-            } else if (parent instanceof Dimension) {
-                return parent.getHierarchy();
-            } else if (failIfNotFound) {
-                throw Util.newError(
-                    "Can not find hierarchy '" + implode(names) + "'");
-            } else {
-                return null;
-            }
-        case Category.Level:
-            if (parent instanceof Level) {
-                return parent;
-            } else if (failIfNotFound) {
-                throw Util.newError(
-                    "Can not find level '" + implode(names) + "'");
-            } else {
-                return null;
-            }
-        case Category.Member:
-            if (parent instanceof Member) {
-                return parent;
-            } else if (failIfNotFound) {
-                throw MondrianResource.instance().MdxCantFindMember.ex(
-                    implode(names));
-            } else {
-                return null;
-            }
-        case Category.Unknown:
-            assertPostcondition(parent != null, "return != null");
-            return parent;
-        default:
-            throw newInternal("Bad switch " + category);
+            default:
+                throw newInternal("Bad switch " + category);
         }
     }
 
     public static OlapElement lookup(Query q, List<Id.Segment> nameParts) {
         final Exp exp = lookup(q, nameParts, false);
         if (exp instanceof MemberExpr) {
-            MemberExpr memberExpr = (MemberExpr) exp;
+            final MemberExpr memberExpr = (MemberExpr) exp;
             return memberExpr.getMember();
         } else if (exp instanceof LevelExpr) {
-            LevelExpr levelExpr = (LevelExpr) exp;
+            final LevelExpr levelExpr = (LevelExpr) exp;
             return levelExpr.getLevel();
         } else if (exp instanceof HierarchyExpr) {
-            HierarchyExpr hierarchyExpr = (HierarchyExpr) exp;
+            final HierarchyExpr hierarchyExpr = (HierarchyExpr) exp;
             return hierarchyExpr.getHierarchy();
         } else if (exp instanceof DimensionExpr) {
-            DimensionExpr dimensionExpr = (DimensionExpr) exp;
+            final DimensionExpr dimensionExpr = (DimensionExpr) exp;
             return dimensionExpr.getDimension();
         } else {
             throw Util.newInternal("Not an olap element: " + exp);
@@ -892,11 +871,7 @@ public class Util extends XOMUtil {
      * @param allowProp Whether to allow property references
      * @return OLAP object or property reference
      */
-    public static Exp lookup(
-        Query q,
-        List<Id.Segment> nameParts,
-        boolean allowProp)
-    {
+    public static Exp lookup(Query q, List<Id.Segment> nameParts, boolean allowProp) {
         return lookup(q, q.getSchemaReader(true), nameParts, allowProp);
     }
 
@@ -916,62 +891,35 @@ public class Util extends XOMUtil {
      * @param allowProp Whether to allow property references
      * @return OLAP object or property reference
      */
-    public static Exp lookup(
-        Query q,
-        SchemaReader schemaReader,
-        List<Id.Segment> segments,
-        boolean allowProp)
-    {
+    public static Exp lookup(Query q, SchemaReader schemaReader, List<Id.Segment> segments, boolean allowProp) {
         // First, look for a calculated member defined in the query.
         final String fullName = quoteMdxIdentifier(segments);
         // Look for any kind of object (member, level, hierarchy,
         // dimension) in the cube. Use a schema reader without restrictions.
-        final SchemaReader schemaReaderSansAc =
-            schemaReader.withoutAccessControl().withLocus();
+        final SchemaReader schemaReaderSansAc = schemaReader.withoutAccessControl().withLocus();
         final Cube cube = q.getCube();
-        OlapElement olapElement =
-            schemaReaderSansAc.lookupCompound(
-                cube, segments, false, Category.Unknown);
+        OlapElement olapElement = schemaReaderSansAc.lookupCompound(cube, segments, false, Category.Unknown);
         if (olapElement != null) {
-            Role role = schemaReader.getRole();
+            final Role role = schemaReader.getRole();
             if (!role.canAccess(olapElement)) {
                 olapElement = null;
             }
             if (olapElement instanceof Member) {
-                olapElement =
-                    schemaReader.substitute((Member) olapElement);
+                olapElement = schemaReader.substitute((Member) olapElement);
             }
         }
         if (olapElement == null) {
-            if (allowProp && segments.size() > 1) {
-                List<Id.Segment> segmentsButOne =
-                    segments.subList(0, segments.size() - 1);
+            if (allowProp && (segments.size() > 1)) {
+                final List<Id.Segment> segmentsButOne = segments.subList(0, segments.size() - 1);
                 final Id.Segment lastSegment = last(segments);
-                final String propertyName =
-                    lastSegment instanceof Id.NameSegment
-                        ? ((Id.NameSegment) lastSegment).getName()
-                        : null;
-                final Member member =
-                    (Member) schemaReaderSansAc.lookupCompound(
-                        cube, segmentsButOne, false, Category.Member);
-                if (member != null
-                    && propertyName != null
-                    && isValidProperty(propertyName, member.getLevel()))
-                {
-                    return new UnresolvedFunCall(
-                        propertyName, Syntax.Property, new Exp[] {
-                            createExpr(member)});
+                final String propertyName = lastSegment instanceof Id.NameSegment ? ((Id.NameSegment) lastSegment).getName() : null;
+                final Member member = (Member) schemaReaderSansAc.lookupCompound(cube, segmentsButOne, false, Category.Member);
+                if ((member != null) && (propertyName != null) && isValidProperty(propertyName, member.getLevel())) {
+                    return new UnresolvedFunCall(propertyName, Syntax.Property, new Exp[] { createExpr(member) });
                 }
-                final Level level =
-                    (Level) schemaReaderSansAc.lookupCompound(
-                        cube, segmentsButOne, false, Category.Level);
-                if (level != null
-                    && propertyName != null
-                    && isValidProperty(propertyName, level))
-                {
-                    return new UnresolvedFunCall(
-                        propertyName, Syntax.Property, new Exp[] {
-                            createExpr(level)});
+                final Level level = (Level) schemaReaderSansAc.lookupCompound(cube, segmentsButOne, false, Category.Level);
+                if ((level != null) && (propertyName != null) && isValidProperty(propertyName, level)) {
+                    return new UnresolvedFunCall(propertyName, Syntax.Property, new Exp[] { createExpr(level) });
                 }
             }
             // if we're in the middle of loading the schema, the property has
@@ -982,22 +930,18 @@ public class Util extends XOMUtil {
             if (q.ignoreInvalidMembers()) {
                 int nameLen = segments.size() - 1;
                 olapElement = null;
-                while (nameLen > 0 && olapElement == null) {
-                    List<Id.Segment> partialName =
-                        segments.subList(0, nameLen);
-                    olapElement = schemaReaderSansAc.lookupCompound(
-                        cube, partialName, false, Category.Unknown);
+                while ((nameLen > 0) && (olapElement == null)) {
+                    final List<Id.Segment> partialName = segments.subList(0, nameLen);
+                    olapElement = schemaReaderSansAc.lookupCompound(cube, partialName, false, Category.Unknown);
                     nameLen--;
                 }
                 if (olapElement != null) {
                     olapElement = olapElement.getHierarchy().getNullMember();
                 } else {
-                    throw MondrianResource.instance().MdxChildObjectNotFound.ex(
-                        fullName, cube.getQualifiedName());
+                    throw mondrian.resource.MondrianResource.instance().MdxChildObjectNotFound.ex(fullName, cube.getQualifiedName());
                 }
             } else {
-                throw MondrianResource.instance().MdxChildObjectNotFound.ex(
-                    fullName, cube.getQualifiedName());
+                throw mondrian.resource.MondrianResource.instance().MdxChildObjectNotFound.ex(fullName, cube.getQualifiedName());
             }
         }
         // keep track of any measure members referenced; these will be used
@@ -1014,12 +958,8 @@ public class Util extends XOMUtil {
      * @param fail Whether to fail if not found.
      * @return Cube, or null if not found
      */
-    static Cube lookupCube(
-        SchemaReader schemaReader,
-        String cubeName,
-        boolean fail)
-    {
-        for (Cube cube : schemaReader.getCubes()) {
+    static Cube lookupCube(SchemaReader schemaReader, String cubeName, boolean fail) {
+        for (final Cube cube : schemaReader.getCubes()) {
             if (Util.compareName(cube.getName(), cubeName) == 0) {
                 return cube;
             }
@@ -1034,33 +974,29 @@ public class Util extends XOMUtil {
      * Converts an olap element (dimension, hierarchy, level or member) into
      * an expression representing a usage of that element in an MDX statement.
      */
-    public static Exp createExpr(OlapElement element)
-    {
+    public static Exp createExpr(OlapElement element) {
         if (element instanceof Member) {
-            Member member = (Member) element;
+            final Member member = (Member) element;
             return new MemberExpr(member);
         } else if (element instanceof Level) {
-            Level level = (Level) element;
+            final Level level = (Level) element;
             return new LevelExpr(level);
         } else if (element instanceof Hierarchy) {
-            Hierarchy hierarchy = (Hierarchy) element;
+            final Hierarchy hierarchy = (Hierarchy) element;
             return new HierarchyExpr(hierarchy);
         } else if (element instanceof Dimension) {
-            Dimension dimension = (Dimension) element;
+            final Dimension dimension = (Dimension) element;
             return new DimensionExpr(dimension);
         } else if (element instanceof NamedSet) {
-            NamedSet namedSet = (NamedSet) element;
+            final NamedSet namedSet = (NamedSet) element;
             return new NamedSetExpr(namedSet);
         } else {
             throw Util.newInternal("Unexpected element type: " + element);
         }
     }
 
-    public static Member lookupHierarchyRootMember(
-        SchemaReader reader, Hierarchy hierarchy, Id.NameSegment memberName)
-    {
-        return lookupHierarchyRootMember(
-            reader, hierarchy, memberName, MatchType.EXACT);
+    public static Member lookupHierarchyRootMember(SchemaReader reader, Hierarchy hierarchy, Id.NameSegment memberName) {
+        return lookupHierarchyRootMember(reader, hierarchy, memberName, MatchType.EXACT);
     }
 
     /**
@@ -1070,67 +1006,45 @@ public class Util extends XOMUtil {
      * @param memberName Name of root member
      * @return Member, or null if not found
      */
-    public static Member lookupHierarchyRootMember(
-        SchemaReader reader,
+    public static Member lookupHierarchyRootMember(SchemaReader reader,
         Hierarchy hierarchy,
         Id.NameSegment memberName,
-        MatchType matchType)
-    {
+        MatchType matchType) {
         // Lookup member at first level.
         //
         // Don't use access control. Suppose we cannot see the 'nation' level,
         // we still want to be able to resolve '[Customer].[USA].[CA]'.
-        List<Member> rootMembers = reader.getHierarchyRootMembers(hierarchy);
+        final List<Member> rootMembers = reader.getHierarchyRootMembers(hierarchy);
 
         // if doing an inexact search on a non-all hierarchy, create
         // a member corresponding to the name we're searching for so
         // we can use it in a hierarchical search
         Member searchMember = null;
-        if (!matchType.isExact()
-            && !hierarchy.hasAll()
-            && !rootMembers.isEmpty())
-        {
-            searchMember =
-                hierarchy.createMember(
-                    null,
-                    rootMembers.get(0).getLevel(),
-                    memberName.name,
-                    null);
+        if (!matchType.isExact() && !hierarchy.hasAll() && !rootMembers.isEmpty()) {
+            searchMember = hierarchy.createMember(null, rootMembers.get(0).getLevel(), memberName.name, null);
         }
 
         int bestMatch = -1;
         int k = -1;
-        for (Member rootMember : rootMembers) {
+        for (final Member rootMember : rootMembers) {
             ++k;
             int rc;
             // when searching on the ALL hierarchy, match must be exact
             if (matchType.isExact() || hierarchy.hasAll()) {
                 rc = rootMember.getName().compareToIgnoreCase(memberName.name);
             } else {
-                rc = FunUtil.compareSiblingMembers(
-                    rootMember,
-                    searchMember);
+                rc = FunUtil.compareSiblingMembers(rootMember, searchMember);
             }
             if (rc == 0) {
                 return rootMember;
             }
             if (!hierarchy.hasAll()) {
                 if (matchType == MatchType.BEFORE) {
-                    if (rc < 0
-                        && (bestMatch == -1
-                            || FunUtil.compareSiblingMembers(
-                                rootMember,
-                                rootMembers.get(bestMatch)) > 0))
-                    {
+                    if ((rc < 0) && ((bestMatch == -1) || (FunUtil.compareSiblingMembers(rootMember, rootMembers.get(bestMatch)) > 0))) {
                         bestMatch = k;
                     }
                 } else if (matchType == MatchType.AFTER) {
-                    if (rc > 0
-                        && (bestMatch == -1
-                            || FunUtil.compareSiblingMembers(
-                                rootMember,
-                                rootMembers.get(bestMatch)) < 0))
-                    {
+                    if ((rc > 0) && ((bestMatch == -1) || (FunUtil.compareSiblingMembers(rootMember, rootMembers.get(bestMatch)) < 0))) {
                         bestMatch = k;
                     }
                 }
@@ -1141,17 +1055,14 @@ public class Util extends XOMUtil {
             return null;
         }
 
-        if (matchType != MatchType.EXACT && bestMatch != -1) {
+        if ((matchType != MatchType.EXACT) && (bestMatch != -1)) {
             return rootMembers.get(bestMatch);
         }
         // If the first level is 'all', lookup member at second level. For
         // example, they could say '[USA]' instead of '[(All
         // Customers)].[USA]'.
-        return (rootMembers.size() > 0 && rootMembers.get(0).isAll())
-            ? reader.lookupMemberChildByName(
-                rootMembers.get(0),
-                memberName,
-                matchType)
+        return ((rootMembers.size() > 0) && rootMembers.get(0).isAll())
+            ? reader.lookupMemberChildByName(rootMembers.get(0), memberName, matchType)
             : null;
     }
 
@@ -1161,7 +1072,7 @@ public class Util extends XOMUtil {
      */
     public static Level lookupHierarchyLevel(Hierarchy hierarchy, String s) {
         final Level[] levels = hierarchy.getLevels();
-        for (Level level : levels) {
+        for (final Level level : levels) {
             if (level.getName().equalsIgnoreCase(s)) {
                 return level;
             }
@@ -1169,19 +1080,12 @@ public class Util extends XOMUtil {
         return null;
     }
 
-
-
     /**
      * Finds the zero based ordinal of a Member among its siblings.
      */
-    public static int getMemberOrdinalInParent(
-        SchemaReader reader,
-        Member member)
-    {
-        Member parent = member.getParentMember();
-        List<Member> siblings =
-            (parent == null)
-            ? reader.getHierarchyRootMembers(member.getHierarchy())
+    public static int getMemberOrdinalInParent(SchemaReader reader, Member member) {
+        final Member parent = member.getParentMember();
+        final List<Member> siblings = (parent == null) ? reader.getHierarchyRootMembers(member.getHierarchy())
             : reader.getMemberChildren(parent);
 
         for (int i = 0; i < siblings.size(); i++) {
@@ -1189,8 +1093,7 @@ public class Util extends XOMUtil {
                 return i;
             }
         }
-        throw Util.newInternal(
-            "could not find member " + member + " amongst its siblings");
+        throw Util.newInternal("could not find member " + member + " amongst its siblings");
     }
 
     /**
@@ -1198,14 +1101,10 @@ public class Util extends XOMUtil {
      * If parent = [Time].[1997] and level = [Time].[Month], then
      * the member [Time].[1997].[Q1].[1] will be returned
      */
-    public static Member getFirstDescendantOnLevel(
-        SchemaReader reader,
-        Member parent,
-        Level level)
-    {
+    public static Member getFirstDescendantOnLevel(SchemaReader reader, Member parent, Level level) {
         Member m = parent;
         while (m.getLevel() != level) {
-            List<Member> children = reader.getMemberChildren(m);
+            final List<Member> children = reader.getMemberChildren(m);
             m = children.get(0);
         }
         return m;
@@ -1224,7 +1123,7 @@ public class Util extends XOMUtil {
      * <code>singleQuoteForSql("don't")</code> yields <code>'don''t'</code>.
      */
     public static String singleQuoteString(String val) {
-        StringBuilder buf = new StringBuilder(64);
+        final StringBuilder buf = new StringBuilder(64);
         singleQuoteString(val, buf);
         return buf.toString();
     }
@@ -1237,7 +1136,7 @@ public class Util extends XOMUtil {
     public static void singleQuoteString(String val, StringBuilder buf) {
         buf.append('\'');
 
-        String s0 = replace(val, "'", "''");
+        final String s0 = replace(val, "'", "''");
         buf.append(s0);
 
         buf.append('\'');
@@ -1259,7 +1158,7 @@ public class Util extends XOMUtil {
         if (seed == 0) {
             seed = new Random().nextLong();
             System.out.println("random: seed=" + seed);
-        } else if (seed == -1 && metaRandom != null) {
+        } else if ((seed == -1) && (metaRandom != null)) {
             seed = metaRandom.nextLong();
         }
         return new Random(seed);
@@ -1275,10 +1174,7 @@ public class Util extends XOMUtil {
      * @param level Level
      * @return Whether property is valid
      */
-    public static boolean isValidProperty(
-        String propertyName,
-        Level level)
-    {
+    public static boolean isValidProperty(String propertyName, Level level) {
         return lookupProperty(level, propertyName) != null;
     }
 
@@ -1286,13 +1182,10 @@ public class Util extends XOMUtil {
      * Finds a member property called <code>propertyName</code> at, or above,
      * <code>level</code>.
      */
-    public static Property lookupProperty(
-        Level level,
-        String propertyName)
-    {
+    public static Property lookupProperty(Level level, String propertyName) {
         do {
-            Property[] properties = level.getProperties();
-            for (Property property : properties) {
+            final Property[] properties = level.getProperties();
+            for (final Property property : properties) {
                 if (property.getName().equals(propertyName)) {
                     return property;
                 }
@@ -1300,13 +1193,9 @@ public class Util extends XOMUtil {
             level = level.getParentLevel();
         } while (level != null);
         // Now try a standard property.
-        boolean caseSensitive =
-            MondrianProperties.instance().CaseSensitive.get();
+        final boolean caseSensitive = mondrian.olap.MondrianProperties.instance().CaseSensitive.get();
         final Property property = Property.lookup(propertyName, caseSensitive);
-        if (property != null
-            && property.isMemberProperty()
-            && property.isStandard())
-        {
+        if ((property != null) && property.isMemberProperty() && property.isStandard()) {
             return property;
         }
         return null;
@@ -1318,6 +1207,7 @@ public class Util extends XOMUtil {
      *
      * @deprecated
      */
+    @Deprecated
     public static <T> T deprecated(T reason) {
         throw new UnsupportedOperationException(reason.toString());
     }
@@ -1328,6 +1218,7 @@ public class Util extends XOMUtil {
      *
      * @deprecated
      */
+    @Deprecated
     public static <T> T deprecated(T reason, boolean fail) {
         if (fail) {
             throw new UnsupportedOperationException(reason.toString());
@@ -1336,22 +1227,16 @@ public class Util extends XOMUtil {
         }
     }
 
-    public static List<Member> addLevelCalculatedMembers(
-        SchemaReader reader,
-        Level level,
-        List<Member> members)
-    {
-        List<Member> calcMembers =
-            reader.getCalculatedMembers(level.getHierarchy());
-        List<Member> calcMembersInThisLevel = new ArrayList<Member>();
-        for (Member calcMember : calcMembers) {
+    public static List<Member> addLevelCalculatedMembers(SchemaReader reader, Level level, List<Member> members) {
+        final List<Member> calcMembers = reader.getCalculatedMembers(level.getHierarchy());
+        final List<Member> calcMembersInThisLevel = new ArrayList<Member>();
+        for (final Member calcMember : calcMembers) {
             if (calcMember.getLevel().equals(level)) {
                 calcMembersInThisLevel.add(calcMember);
             }
         }
         if (!calcMembersInThisLevel.isEmpty()) {
-            List<Member> newMemberList =
-                new ConcatenableList<Member>();
+            final List<Member> newMemberList = new ConcatenableList<Member>();
             newMemberList.addAll(members);
             newMemberList.addAll(calcMembersInThisLevel);
             return newMemberList;
@@ -1371,13 +1256,10 @@ public class Util extends XOMUtil {
      * Returns an exception indicating that we didn't expect to find this value
      * here.
      */
-    public static <T extends Enum<T>> RuntimeException badValue(
-        Enum<T> anEnum)
-    {
-        return Util.newInternal(
-            "Was not expecting value '" + anEnum
-            + "' for enumeration '" + anEnum.getDeclaringClass().getName()
-            + "' in this context");
+    public static <T extends Enum<T>> RuntimeException badValue(Enum<T> anEnum) {
+        return Util
+            .newInternal(
+                "Was not expecting value '" + anEnum + "' for enumeration '" + anEnum.getDeclaringClass().getName() + "' in this context");
     }
 
     /**
@@ -1389,34 +1271,30 @@ public class Util extends XOMUtil {
      * @return Regular expression
      */
     public static String wildcardToRegexp(List<String> wildcards) {
-        StringBuilder buf = new StringBuilder();
-        for (String value : wildcards) {
+        final StringBuilder buf = new StringBuilder();
+        for (final String value : wildcards) {
             if (buf.length() > 0) {
                 buf.append('|');
             }
             int i = 0;
             while (true) {
-                int percent = value.indexOf('%', i);
-                int underscore = value.indexOf('_', i);
-                if (percent == -1 && underscore == -1) {
+                final int percent = value.indexOf('%', i);
+                final int underscore = value.indexOf('_', i);
+                if ((percent == -1) && (underscore == -1)) {
                     if (i < value.length()) {
                         buf.append(quotePattern(value.substring(i)));
                     }
                     break;
                 }
-                if (underscore >= 0 && (underscore < percent || percent < 0)) {
+                if ((underscore >= 0) && ((underscore < percent) || (percent < 0))) {
                     if (i < underscore) {
-                        buf.append(
-                            quotePattern(value.substring(i, underscore)));
+                        buf.append(quotePattern(value.substring(i, underscore)));
                     }
                     buf.append('.');
                     i = underscore + 1;
-                } else if (percent >= 0
-                    && (percent < underscore || underscore < 0))
-                {
+                } else if ((percent >= 0) && ((percent < underscore) || (underscore < 0))) {
                     if (i < percent) {
-                    buf.append(
-                        quotePattern(value.substring(i, percent)));
+                        buf.append(quotePattern(value.substring(i, percent)));
                     }
                     buf.append(".*");
                     i = percent + 1;
@@ -1437,12 +1315,12 @@ public class Util extends XOMUtil {
      * @return  Upper-case string
      */
     public static String camelToUpper(String s) {
-        StringBuilder buf = new StringBuilder(s.length() + 10);
+        final StringBuilder buf = new StringBuilder(s.length() + 10);
         int prevUpper = -1;
         for (int i = 0; i < s.length(); ++i) {
             char c = s.charAt(i);
             if (Character.isUpperCase(c)) {
-                if (i > prevUpper + 1) {
+                if (i > (prevUpper + 1)) {
                     buf.append('_');
                 }
                 prevUpper = i;
@@ -1473,35 +1351,27 @@ public class Util extends XOMUtil {
             // entries after separator.
             final String zzz = "zzz";
             final List<String> list = parseCommaList(nameCommaList + zzz);
-            String last = list.get(list.size() - 1);
+            final String last = list.get(list.size() - 1);
             if (last.equals(zzz)) {
                 list.remove(list.size() - 1);
             } else {
-                list.set(
-                    list.size() - 1,
-                    last.substring(0, last.length() - zzz.length()));
+                list.set(list.size() - 1, last.substring(0, last.length() - zzz.length()));
             }
             return list;
         }
-        List<String> names = new ArrayList<String>();
+        final List<String> names = new ArrayList<String>();
         final String[] strings = nameCommaList.split(",");
-        for (String string : strings) {
+        for (final String string : strings) {
             final int count = names.size();
-            if (count > 0
-                && names.get(count - 1).equals(""))
-            {
+            if ((count > 0) && names.get(count - 1).equals("")) {
                 if (count == 1) {
                     if (string.equals("")) {
                         names.add("");
                     } else {
-                        names.set(
-                            0,
-                            "," + string);
+                        names.set(0, "," + string);
                     }
                 } else {
-                    names.set(
-                        count - 2,
-                        names.get(count - 2) + "," + string);
+                    names.set(count - 2, names.get(count - 2) + "," + string);
                     names.remove(count - 1);
                 }
             } else {
@@ -1520,13 +1390,8 @@ public class Util extends XOMUtil {
      * @param defaultValue Value to return if annotation is not present
      * @return value of annotation
      */
-    public static <T> T getAnnotation(
-        Method method,
-        String annotationClassName,
-        T defaultValue)
-    {
-        return compatible.getAnnotation(
-            method, annotationClassName, defaultValue);
+    public static <T> T getAnnotation(Method method, String annotationClassName, T defaultValue) {
+        return compatible.getAnnotation(method, annotationClassName, defaultValue);
     }
 
     /**
@@ -1555,14 +1420,11 @@ public class Util extends XOMUtil {
      * @param list List
      * @return String representation of string
      */
-    public static <T> String commaList(
-        String s,
-        List<T> list)
-    {
+    public static <T> String commaList(String s, List<T> list) {
         final StringBuilder buf = new StringBuilder(s);
         buf.append("(");
         int k = -1;
-        for (T t : list) {
+        for (final T t : list) {
             if (++k > 0) {
                 buf.append(", ");
             }
@@ -1582,11 +1444,7 @@ public class Util extends XOMUtil {
      *
      * @return Unique name
      */
-    public static String uniquify(
-        String name,
-        int maxLength,
-        Collection<String> nameList)
-    {
+    public static String uniquify(String name, int maxLength, Collection<String> nameList) {
         assert name != null;
         if (name.length() > maxLength) {
             name = name.substring(0, maxLength);
@@ -1618,17 +1476,15 @@ public class Util extends XOMUtil {
      * @param collection Collection
      * @return boolean true if all values are same
      */
-    public static <T> boolean areOccurencesEqual(
-        Collection<T> collection)
-    {
-        Iterator<T> it = collection.iterator();
+    public static <T> boolean areOccurencesEqual(Collection<T> collection) {
+        final Iterator<T> it = collection.iterator();
         if (!it.hasNext()) {
             // Collection is empty
             return false;
         }
-        T first = it.next();
+        final T first = it.next();
         while (it.hasNext()) {
-            T t = it.next();
+            final T t = it.next();
             if (!t.equals(first)) {
                 return false;
             }
@@ -1669,23 +1525,23 @@ public class Util extends XOMUtil {
      */
     private static <T> List<T> _flatList(T[] t, boolean copy) {
         switch (t.length) {
-        case 0:
-            return Collections.emptyList();
-        case 1:
-            return Collections.singletonList(t[0]);
-        case 2:
-            return new Flat2List<T>(t[0], t[1]);
-        case 3:
-            return new Flat3List<T>(t[0], t[1], t[2]);
-        default:
-            // REVIEW: AbstractList contains a modCount field; we could
-            //   write our own implementation and reduce creation overhead a
-            //   bit.
-            if (copy) {
-                return Arrays.asList(t.clone());
-            } else {
-                return Arrays.asList(t);
-            }
+            case 0:
+                return Collections.emptyList();
+            case 1:
+                return Collections.singletonList(t[0]);
+            case 2:
+                return new Flat2List<T>(t[0], t[1]);
+            case 3:
+                return new Flat3List<T>(t[0], t[1], t[2]);
+            default:
+                // REVIEW: AbstractList contains a modCount field; we could
+                //   write our own implementation and reduce creation overhead a
+                //   bit.
+                if (copy) {
+                    return Arrays.asList(t.clone());
+                } else {
+                    return Arrays.asList(t);
+                }
         }
     }
 
@@ -1699,20 +1555,20 @@ public class Util extends XOMUtil {
      */
     public static <T> List<T> flatList(List<T> t) {
         switch (t.size()) {
-        case 0:
-            return Collections.emptyList();
-        case 1:
-            return Collections.singletonList(t.get(0));
-        case 2:
-            return new Flat2List<T>(t.get(0), t.get(1));
-        case 3:
-            return new Flat3List<T>(t.get(0), t.get(1), t.get(2));
-        default:
-            // REVIEW: AbstractList contains a modCount field; we could
-            //   write our own implementation and reduce creation overhead a
-            //   bit.
-            //noinspection unchecked
-            return (List<T>) Arrays.asList(t.toArray());
+            case 0:
+                return Collections.emptyList();
+            case 1:
+                return Collections.singletonList(t.get(0));
+            case 2:
+                return new Flat2List<T>(t.get(0), t.get(1));
+            case 3:
+                return new Flat3List<T>(t.get(0), t.get(1), t.get(2));
+            default:
+                // REVIEW: AbstractList contains a modCount field; we could
+                //   write our own implementation and reduce creation overhead a
+                //   bit.
+                //noinspection unchecked
+                return (List<T>) Arrays.asList(t.toArray());
         }
     }
 
@@ -1725,29 +1581,21 @@ public class Util extends XOMUtil {
      * @return Java locale object
      */
     public static Locale parseLocale(String localeString) {
-        String[] strings = localeString.split("_");
+        final String[] strings = localeString.split("_");
         switch (strings.length) {
-        case 1:
-            return new Locale(strings[0]);
-        case 2:
-            return new Locale(strings[0], strings[1]);
-        case 3:
-            return new Locale(strings[0], strings[1], strings[2]);
-        default:
-            throw newInternal(
-                "bad locale string '" + localeString + "'");
+            case 1:
+                return new Locale(strings[0]);
+            case 2:
+                return new Locale(strings[0], strings[1]);
+            case 3:
+                return new Locale(strings[0], strings[1], strings[2]);
+            default:
+                throw newInternal("bad locale string '" + localeString + "'");
         }
     }
 
-    private static final Map<String, String> TIME_UNITS =
-        Olap4jUtil.mapOf(
-            "ns", "NANOSECONDS",
-            "us", "MICROSECONDS",
-            "ms", "MILLISECONDS",
-            "s", "SECONDS",
-            "m", "MINUTES",
-            "h", "HOURS",
-            "d", "DAYS");
+    private static final Map<String, String> TIME_UNITS = Olap4jUtil
+        .mapOf("ns", "NANOSECONDS", "us", "MICROSECONDS", "ms", "MILLISECONDS", "s", "SECONDS", "m", "MINUTES", "h", "HOURS", "d", "DAYS");
 
     /**
      * Parses an interval.
@@ -1768,13 +1616,10 @@ public class Util extends XOMUtil {
      * @throws NumberFormatException if unit is not present and there is no
      * default, or if number is not valid
      */
-    public static Pair<Long, TimeUnit> parseInterval(
-        String s,
-        TimeUnit unit)
-        throws NumberFormatException
-    {
+    public static Pair<Long, TimeUnit> parseInterval(String s, TimeUnit unit)
+        throws NumberFormatException {
         final String original = s;
-        for (Map.Entry<String, String> entry : TIME_UNITS.entrySet()) {
+        for (final Map.Entry<String, String> entry : TIME_UNITS.entrySet()) {
             final String abbrev = entry.getKey();
             if (s.endsWith(abbrev)) {
                 final String full = entry.getValue();
@@ -1782,23 +1627,22 @@ public class Util extends XOMUtil {
                     unit = TimeUnit.valueOf(full);
                     s = s.substring(0, s.length() - abbrev.length());
                     break;
-                } catch (IllegalArgumentException e) {
+                } catch (final IllegalArgumentException e) {
                     // ignore - MINUTES, HOURS, DAYS are not defined in JDK1.5
                 }
             }
         }
         if (unit == null) {
-            throw new NumberFormatException(
-                "Invalid time interval '" + original + "'. Does not contain a "
+            throw new NumberFormatException("Invalid time interval '" + original
+                + "'. Does not contain a "
                 + "time unit. (Suffix may be ns (nanoseconds), "
                 + "us (microseconds), ms (milliseconds), s (seconds), "
                 + "h (hours), d (days). For example, '20s' means 20 seconds.)");
         }
         try {
             return Pair.of(new BigDecimal(s).longValue(), unit);
-        } catch (NumberFormatException e) {
-            throw new NumberFormatException(
-                "Invalid time interval '" + original + "'");
+        } catch (final NumberFormatException e) {
+            throw new NumberFormatException("Invalid time interval '" + original + "'");
         }
     }
 
@@ -1809,11 +1653,9 @@ public class Util extends XOMUtil {
      * @param olap4jSegmentList List of olap4j segments
      * @return List of mondrian segments
      */
-    public static List<Id.Segment> convert(
-        List<IdentifierSegment> olap4jSegmentList)
-    {
+    public static List<Id.Segment> convert(List<IdentifierSegment> olap4jSegmentList) {
         final List<Id.Segment> list = new ArrayList<Id.Segment>();
-        for (IdentifierSegment olap4jSegment : olap4jSegmentList) {
+        for (final IdentifierSegment olap4jSegment : olap4jSegmentList) {
             list.add(convert(olap4jSegment));
         }
         return list;
@@ -1834,34 +1676,33 @@ public class Util extends XOMUtil {
     }
 
     private static Id.KeySegment convert(final KeySegment keySegment) {
-        return new Id.KeySegment(
-            new AbstractList<Id.NameSegment>() {
-                public Id.NameSegment get(int index) {
-                    return convert(keySegment.getKeyParts().get(index));
-                }
+        return new Id.KeySegment(new AbstractList<Id.NameSegment>() {
+            @Override
+            public Id.NameSegment get(int index) {
+                return convert(keySegment.getKeyParts().get(index));
+            }
 
-                public int size() {
-                    return keySegment.getKeyParts().size();
-                }
-            });
+            @Override
+            public int size() {
+                return keySegment.getKeyParts().size();
+            }
+        });
     }
 
     private static Id.NameSegment convert(NameSegment nameSegment) {
-        return new Id.NameSegment(
-            nameSegment.getName(),
-            convert(nameSegment.getQuoting()));
+        return new Id.NameSegment(nameSegment.getName(), convert(nameSegment.getQuoting()));
     }
 
     private static Id.Quoting convert(Quoting quoting) {
         switch (quoting) {
-        case QUOTED:
-            return Id.Quoting.QUOTED;
-        case UNQUOTED:
-            return Id.Quoting.UNQUOTED;
-        case KEY:
-            return Id.Quoting.KEY;
-        default:
-            throw Util.unexpected(quoting);
+            case QUOTED:
+                return Id.Quoting.QUOTED;
+            case UNQUOTED:
+                return Id.Quoting.UNQUOTED;
+            case KEY:
+                return Id.Quoting.KEY;
+            default:
+                throw Util.unexpected(quoting);
         }
     }
 
@@ -1874,27 +1715,24 @@ public class Util extends XOMUtil {
      * @return Iterable that returns only members of underlying iterable for
      *     for which all conditions evaluate to true
      */
-    public static <T> Iterable<T> filter(
-        final Iterable<T> iterable,
-        final Functor1<Boolean, T>... conds)
-    {
+    public static <T> Iterable<T> filter(final Iterable<T> iterable, final Functor1<Boolean, T>... conds) {
         final Functor1<Boolean, T>[] conds2 = optimizeConditions(conds);
         if (conds2.length == 0) {
             return iterable;
         }
         return new Iterable<T>() {
+            @Override
             public Iterator<T> iterator() {
                 return new Iterator<T>() {
                     final Iterator<T> iterator = iterable.iterator();
                     T next;
-                    boolean hasNext = moveToNext();
+                    boolean hasNext = this.moveToNext();
 
                     private boolean moveToNext() {
-                        outer:
-                        while (iterator.hasNext()) {
-                            next = iterator.next();
-                            for (Functor1<Boolean, T> cond : conds2) {
-                                if (!cond.apply(next)) {
+                        outer: while (this.iterator.hasNext()) {
+                            this.next = this.iterator.next();
+                            for (final Functor1<Boolean, T> cond : conds2) {
+                                if (!cond.apply(this.next)) {
                                     continue outer;
                                 }
                             }
@@ -1903,16 +1741,19 @@ public class Util extends XOMUtil {
                         return false;
                     }
 
+                    @Override
                     public boolean hasNext() {
-                        return hasNext;
+                        return this.hasNext;
                     }
 
+                    @Override
                     public T next() {
-                        T t = next;
-                        hasNext = moveToNext();
+                        final T t = this.next;
+                        this.hasNext = this.moveToNext();
                         return t;
                     }
 
+                    @Override
                     public void remove() {
                         throw new UnsupportedOperationException();
                     }
@@ -1921,15 +1762,10 @@ public class Util extends XOMUtil {
         };
     }
 
-    private static <T> Functor1<Boolean, T>[] optimizeConditions(
-        Functor1<Boolean, T>[] conds)
-    {
-        final List<Functor1<Boolean, T>> functor1List =
-            new ArrayList<Functor1<Boolean, T>>(Arrays.asList(conds));
-        for (Iterator<Functor1<Boolean, T>> funcIter =
-            functor1List.iterator(); funcIter.hasNext();)
-        {
-            Functor1<Boolean, T> booleanTFunctor1 = funcIter.next();
+    private static <T> Functor1<Boolean, T>[] optimizeConditions(Functor1<Boolean, T>[] conds) {
+        final List<Functor1<Boolean, T>> functor1List = new ArrayList<Functor1<Boolean, T>>(Arrays.asList(conds));
+        for (final Iterator<Functor1<Boolean, T>> funcIter = functor1List.iterator(); funcIter.hasNext();) {
+            final Functor1<Boolean, T> booleanTFunctor1 = funcIter.next();
             if (booleanTFunctor1 == trueFunctor()) {
                 funcIter.remove();
             }
@@ -1949,10 +1785,8 @@ public class Util extends XOMUtil {
      * @param <T> Element type
      * @return Sorted list
      */
-    public static <T extends Comparable> List<T> sort(
-        Collection<T> collection)
-    {
-        Object[] a = collection.toArray(new Object[collection.size()]);
+    public static <T extends Comparable> List<T> sort(Collection<T> collection) {
+        final Object[] a = collection.toArray(new Object[collection.size()]);
         Arrays.sort(a);
         return cast(Arrays.asList(a));
     }
@@ -1966,24 +1800,21 @@ public class Util extends XOMUtil {
      * @param <T> Element type
      * @return Sorted list
      */
-    public static <T> List<T> sort(
-        Collection<T> collection,
-        Comparator<T> comparator)
-    {
-        Object[] a = collection.toArray(new Object[collection.size()]);
+    public static <T> List<T> sort(Collection<T> collection, Comparator<T> comparator) {
+        final Object[] a = collection.toArray(new Object[collection.size()]);
         //noinspection unchecked
         Arrays.sort(a, (Comparator<? super Object>) comparator);
         return cast(Arrays.asList(a));
     }
 
-    public static List<IdentifierSegment> toOlap4j(
-        final List<Id.Segment> segments)
-    {
+    public static List<IdentifierSegment> toOlap4j(final List<Id.Segment> segments) {
         return new AbstractList<IdentifierSegment>() {
+            @Override
             public IdentifierSegment get(int index) {
                 return toOlap4j(segments.get(index));
             }
 
+            @Override
             public int size() {
                 return segments.size();
             }
@@ -1992,31 +1823,29 @@ public class Util extends XOMUtil {
 
     public static IdentifierSegment toOlap4j(Id.Segment segment) {
         switch (segment.quoting) {
-        case KEY:
-            return toOlap4j((Id.KeySegment) segment);
-        default:
-            return toOlap4j((Id.NameSegment) segment);
+            case KEY:
+                return toOlap4j((Id.KeySegment) segment);
+            default:
+                return toOlap4j((Id.NameSegment) segment);
         }
     }
 
     private static KeySegment toOlap4j(final Id.KeySegment keySegment) {
-        return new KeySegment(
-            new AbstractList<NameSegment>() {
-                public NameSegment get(int index) {
-                    return toOlap4j(keySegment.subSegmentList.get(index));
-                }
+        return new KeySegment(new AbstractList<NameSegment>() {
+            @Override
+            public NameSegment get(int index) {
+                return toOlap4j(keySegment.subSegmentList.get(index));
+            }
 
-                public int size() {
-                    return keySegment.subSegmentList.size();
-                }
-            });
+            @Override
+            public int size() {
+                return keySegment.subSegmentList.size();
+            }
+        });
     }
 
     private static NameSegment toOlap4j(Id.NameSegment nameSegment) {
-        return new NameSegment(
-            null,
-            nameSegment.name,
-            toOlap4j(nameSegment.quoting));
+        return new NameSegment(null, nameSegment.name, toOlap4j(nameSegment.quoting));
     }
 
     public static Quoting toOlap4j(Id.Quoting quoting) {
@@ -2026,23 +1855,19 @@ public class Util extends XOMUtil {
     // TODO: move to IdentifierSegment
     public static boolean matches(IdentifierSegment segment, String name) {
         switch (segment.getQuoting()) {
-        case KEY:
-            return false; // FIXME
-        case QUOTED:
-            return equalName(segment.getName(), name);
-        case UNQUOTED:
-            return segment.getName().equalsIgnoreCase(name);
-        default:
-            throw unexpected(segment.getQuoting());
+            case KEY:
+                return false; // FIXME
+            case QUOTED:
+                return equalName(segment.getName(), name);
+            case UNQUOTED:
+                return segment.getName().equalsIgnoreCase(name);
+            default:
+                throw unexpected(segment.getQuoting());
         }
     }
 
-    public static boolean matches(
-        Member member, List<Id.Segment> nameParts)
-    {
-        if (Util.equalName(Util.implode(nameParts),
-            member.getUniqueName()))
-        {
+    public static boolean matches(Member member, List<Id.Segment> nameParts) {
+        if (Util.equalName(Util.implode(nameParts), member.getUniqueName())) {
             // exact match
             return true;
         }
@@ -2056,33 +1881,24 @@ public class Util extends XOMUtil {
             segment = nameParts.get(nameParts.size() - 1);
         }
         if (segment.matches(member.getName())) {
-            return Util.equalName(
-                member.getHierarchy().getUniqueName(),
-                Util.implode(nameParts.subList(0, nameParts.size() - 1)));
+            return Util.equalName(member.getHierarchy().getUniqueName(), Util.implode(nameParts.subList(0, nameParts.size() - 1)));
         } else if (member.isAll()) {
-            return Util.equalName(
-                member.getHierarchy().getUniqueName(),
-                Util.implode(nameParts));
+            return Util.equalName(member.getHierarchy().getUniqueName(), Util.implode(nameParts));
         } else {
             return false;
         }
     }
 
-
-    public static RuntimeException newElementNotFoundException(
-        int category,
-        IdentifierNode identifierNode)
-    {
+    public static RuntimeException newElementNotFoundException(int category, IdentifierNode identifierNode) {
         String type;
         switch (category) {
-        case Category.Member:
-            return MondrianResource.instance().MemberNotFound.ex(
-                identifierNode.toString());
-        case Category.Unknown:
-            type = "Element";
-            break;
-        default:
-            type = Category.instance().getDescription(category);
+            case Category.Member:
+                return MondrianResource.instance().MemberNotFound.ex(identifierNode.toString());
+            case Category.Unknown:
+                type = "Element";
+                break;
+            default:
+                type = Category.instance().getDescription(category);
         }
         return newError(type + " '" + identifierNode + "' not found");
     }
@@ -2099,9 +1915,9 @@ public class Util extends XOMUtil {
     public static <T> T safeGet(Future<T> future, String message) {
         try {
             return future.get();
-        } catch (InterruptedException e) {
+        } catch (final InterruptedException e) {
             throw newError(e, message);
-        } catch (ExecutionException e) {
+        } catch (final ExecutionException e) {
             final Throwable cause = e.getCause();
             if (cause instanceof RuntimeException) {
                 throw (RuntimeException) cause;
@@ -2116,54 +1932,67 @@ public class Util extends XOMUtil {
     public static <T> Set<T> newIdentityHashSetFake() {
         final HashMap<T, Boolean> map = new HashMap<T, Boolean>();
         return new Set<T>() {
+            @Override
             public int size() {
                 return map.size();
             }
 
+            @Override
             public boolean isEmpty() {
                 return map.isEmpty();
             }
 
+            @Override
             public boolean contains(Object o) {
                 return map.containsKey(o);
             }
 
+            @Override
             public Iterator<T> iterator() {
                 return map.keySet().iterator();
             }
 
+            @Override
             public Object[] toArray() {
                 return map.keySet().toArray();
             }
 
+            @Override
             public <T> T[] toArray(T[] a) {
                 return map.keySet().toArray(a);
             }
 
+            @Override
             public boolean add(T t) {
                 return map.put(t, Boolean.TRUE) == null;
             }
 
+            @Override
             public boolean remove(Object o) {
                 return map.remove(o) == Boolean.TRUE;
             }
 
+            @Override
             public boolean containsAll(Collection<?> c) {
                 return map.keySet().containsAll(c);
             }
 
+            @Override
             public boolean addAll(Collection<? extends T> c) {
                 throw new UnsupportedOperationException();
             }
 
+            @Override
             public boolean retainAll(Collection<?> c) {
                 throw new UnsupportedOperationException();
             }
 
+            @Override
             public boolean removeAll(Collection<?> c) {
                 throw new UnsupportedOperationException();
             }
 
+            @Override
             public void clear() {
                 map.clear();
             }
@@ -2186,9 +2015,7 @@ public class Util extends XOMUtil {
      * As Arrays#binarySearch(Object[], int, int, Object), but
      * available pre-JDK 1.6.
      */
-    public static <T extends Comparable<T>> int binarySearch(
-        T[] ts, int start, int end, T t)
-    {
+    public static <T extends Comparable<T>> int binarySearch(T[] ts, int start, int end, T t) {
         return compatible.binarySearch(ts, start, end, t);
     }
 
@@ -2201,25 +2028,19 @@ public class Util extends XOMUtil {
      * @param set2 Second set
      * @return Intersection of the sets
      */
-    public static <E extends Comparable> SortedSet<E> intersect(
-        SortedSet<E> set1,
-        SortedSet<E> set2)
-    {
+    public static <E extends Comparable> SortedSet<E> intersect(SortedSet<E> set1, SortedSet<E> set2) {
         if (set1.isEmpty()) {
             return set1;
         }
         if (set2.isEmpty()) {
             return set2;
         }
-        if (!(set1 instanceof ArraySortedSet)
-            || !(set2 instanceof ArraySortedSet))
-        {
+        if (!(set1 instanceof ArraySortedSet) || !(set2 instanceof ArraySortedSet)) {
             final TreeSet<E> set = new TreeSet<E>(set1);
             set.retainAll(set2);
             return set;
         }
-        final Comparable<?>[] result =
-            new Comparable[Math.min(set1.size(), set2.size())];
+        final Comparable<?>[] result = new Comparable[Math.min(set1.size(), set2.size())];
         final Iterator<E> it1 = set1.iterator();
         final Iterator<E> it2 = set2.iterator();
         int i = 0;
@@ -2285,9 +2106,7 @@ public class Util extends XOMUtil {
      */
     public static <T> T only(List<T> list) {
         if (list.size() != 1) {
-            throw new IndexOutOfBoundsException(
-                "list " + list + " has " + list.size()
-                + " elements, expected 1");
+            throw new IndexOutOfBoundsException("list " + list + " has " + list.size() + " elements, expected 1");
         }
         return list.get(0);
     }
@@ -2303,11 +2122,7 @@ public class Util extends XOMUtil {
      * @param statement Statement
      * @param connection Connection
      */
-    public static SQLException close(
-        ResultSet resultSet,
-        Statement statement,
-        Connection connection)
-    {
+    public static SQLException close(ResultSet resultSet, Statement statement, Connection connection) {
         SQLException firstException = null;
         if (resultSet != null) {
             try {
@@ -2315,7 +2130,7 @@ public class Util extends XOMUtil {
                     statement = resultSet.getStatement();
                 }
                 resultSet.close();
-            } catch (Throwable t) {
+            } catch (final Throwable t) {
                 firstException = new SQLException();
                 firstException.initCause(t);
             }
@@ -2323,7 +2138,7 @@ public class Util extends XOMUtil {
         if (statement != null) {
             try {
                 statement.close();
-            } catch (Throwable t) {
+            } catch (final Throwable t) {
                 if (firstException == null) {
                     firstException = new SQLException();
                     firstException.initCause(t);
@@ -2333,7 +2148,7 @@ public class Util extends XOMUtil {
         if (connection != null) {
             try {
                 connection.close();
-            } catch (Throwable t) {
+            } catch (final Throwable t) {
                 if (firstException == null) {
                     firstException = new SQLException();
                     firstException.initCause(t);
@@ -2365,12 +2180,13 @@ public class Util extends XOMUtil {
     }
 
     public static class ErrorCellValue {
+        @Override
         public String toString() {
             return "#ERR";
         }
     }
 
-    @SuppressWarnings({"unchecked"})
+    @SuppressWarnings({ "unchecked" })
     public static <T> T[] genericArray(Class<T> clazz, int size) {
         return (T[]) Array.newInstance(clazz, size);
     }
@@ -2433,10 +2249,8 @@ public class Util extends XOMUtil {
      * @param value Value
      */
     public static RuntimeException unexpected(Enum value) {
-        return Util.newInternal(
-            "Was not expecting value '" + value
-            + "' for enumeration '" + value.getClass().getName()
-            + "' in this context");
+        return Util
+            .newInternal("Was not expecting value '" + value + "' for enumeration '" + value.getClass().getName() + "' in this context");
     }
 
     /**
@@ -2492,9 +2306,9 @@ public class Util extends XOMUtil {
      *    {@link Throwable#getCause cause}.
      */
     public static String[] convertStackToString(Throwable e) {
-        List<String> list = new ArrayList<String>();
+        final List<String> list = new ArrayList<String>();
         while (e != null) {
-            String sMsg = getErrorMessage(e);
+            final String sMsg = getErrorMessage(e);
             list.add(sMsg);
             e = e.getCause();
         }
@@ -2509,9 +2323,7 @@ public class Util extends XOMUtil {
      * or is exactly a {@link java.lang.Exception}.
      */
     public static String getErrorMessage(Throwable err) {
-        boolean prependClassName =
-            !(err instanceof java.sql.SQLException
-              || err.getClass() == java.lang.Exception.class);
+        final boolean prependClassName = !((err instanceof java.sql.SQLException) || (err.getClass() == java.lang.Exception.class));
         return getErrorMessage(err, prependClassName);
     }
 
@@ -2525,20 +2337,15 @@ public class Util extends XOMUtil {
      *   is derived from {@link java.sql.SQLException} or is exactly a {@link
      *   java.lang.Exception}
      */
-    public static String getErrorMessage(
-        Throwable err,
-        boolean prependClassName)
-    {
-        String errMsg = err.getMessage();
+    public static String getErrorMessage(Throwable err, boolean prependClassName) {
+        final String errMsg = err.getMessage();
         if ((errMsg == null) || (err instanceof RuntimeException)) {
-            StringWriter sw = new StringWriter();
-            PrintWriter pw = new PrintWriter(sw);
+            final StringWriter sw = new StringWriter();
+            final PrintWriter pw = new PrintWriter(sw);
             err.printStackTrace(pw);
             return sw.toString();
         } else {
-            return (prependClassName)
-                ? err.getClass().getName() + ": " + errMsg
-                : errMsg;
+            return (prependClassName) ? err.getClass().getName() + ": " + errMsg : errMsg;
         }
     }
 
@@ -2551,14 +2358,13 @@ public class Util extends XOMUtil {
      * @param <T> Class
      * @return Cause of given class, or null
      */
-    public static <T extends Throwable>
-    T getMatchingCause(Throwable e, Class<T> clazz) {
+    public static <T extends Throwable> T getMatchingCause(Throwable e, Class<T> clazz) {
         for (;;) {
             if (clazz.isInstance(e)) {
                 return clazz.cast(e);
             }
             final Throwable cause = e.getCause();
-            if (cause == null || cause == e) {
+            if ((cause == null) || (cause == e)) {
                 return null;
             }
             e = cause;
@@ -2569,8 +2375,8 @@ public class Util extends XOMUtil {
      * Converts an expression to a string.
      */
     public static String unparse(Exp exp) {
-        StringWriter sw = new StringWriter();
-        PrintWriter pw = new PrintWriter(sw);
+        final StringWriter sw = new StringWriter();
+        final PrintWriter pw = new PrintWriter(sw);
         exp.unparse(pw);
         return sw.toString();
     }
@@ -2579,8 +2385,8 @@ public class Util extends XOMUtil {
      * Converts an query to a string.
      */
     public static String unparse(Query query) {
-        StringWriter sw = new StringWriter();
-        PrintWriter pw = new QueryPrintWriter(sw);
+        final StringWriter sw = new StringWriter();
+        final PrintWriter pw = new QueryPrintWriter(sw);
         query.unparse(pw);
         return sw.toString();
     }
@@ -2588,14 +2394,15 @@ public class Util extends XOMUtil {
     /**
      * Creates a file-protocol URL for the given file.
      */
-    public static URL toURL(File file) throws MalformedURLException {
+    public static URL toURL(File file)
+        throws MalformedURLException {
         String path = file.getAbsolutePath();
         // This is a bunch of weird code that is required to
         // make a valid URL on the Windows platform, due
         // to inconsistencies in what getAbsolutePath returns.
-        String fs = System.getProperty("file.separator");
+        final String fs = System.getProperty("file.separator");
         if (fs.length() == 1) {
-            char sep = fs.charAt(0);
+            final char sep = fs.charAt(0);
             if (sep != '/') {
                 path = path.replace(sep, '/');
             }
@@ -2611,11 +2418,8 @@ public class Util extends XOMUtil {
      * <code>PropertyList</code> is an order-preserving list of key-value
      * pairs. Lookup is case-insensitive, but the case of keys is preserved.
      */
-    public static class PropertyList
-        implements Iterable<Pair<String, String>>, Serializable
-    {
-        List<Pair<String, String>> list =
-            new ArrayList<Pair<String, String>>();
+    public static class PropertyList implements Iterable<Pair<String, String>>, Serializable {
+        List<Pair<String, String>> list = new ArrayList<Pair<String, String>>();
 
         public PropertyList() {
             this.list = new ArrayList<Pair<String, String>>();
@@ -2625,19 +2429,19 @@ public class Util extends XOMUtil {
             this.list = list;
         }
 
-        @SuppressWarnings({"CloneDoesntCallSuperClone"})
+        @SuppressWarnings({ "CloneDoesntCallSuperClone" })
         @Override
         public PropertyList clone() {
-            return new PropertyList(new ArrayList<Pair<String, String>>(list));
+            return new PropertyList(new ArrayList<Pair<String, String>>(this.list));
         }
 
         public String get(String key) {
-            return get(key, null);
+            return this.get(key, null);
         }
 
         public String get(String key, String defaultValue) {
-            for (int i = 0, n = list.size(); i < n; i++) {
-                Pair<String, String> pair = list.get(i);
+            for (int i = 0, n = this.list.size(); i < n; i++) {
+                final Pair<String, String> pair = this.list.get(i);
                 if (pair.left.equalsIgnoreCase(key)) {
                     return pair.right;
                 }
@@ -2646,10 +2450,10 @@ public class Util extends XOMUtil {
         }
 
         public String put(String key, String value) {
-            for (int i = 0, n = list.size(); i < n; i++) {
-                Pair<String, String> pair = list.get(i);
+            for (int i = 0, n = this.list.size(); i < n; i++) {
+                final Pair<String, String> pair = this.list.get(i);
                 if (pair.left.equalsIgnoreCase(key)) {
-                    String old = pair.right;
+                    final String old = pair.right;
                     if (key.equalsIgnoreCase("Provider")) {
                         // Unlike all other properties, later values of
                         // "Provider" do not supersede
@@ -2659,16 +2463,16 @@ public class Util extends XOMUtil {
                     return old;
                 }
             }
-            list.add(new Pair<String, String>(key, value));
+            this.list.add(new Pair<String, String>(key, value));
             return null;
         }
 
         public boolean remove(String key) {
             boolean found = false;
-            for (int i = 0; i < list.size(); i++) {
-                Pair<String, String> pair = list.get(i);
+            for (int i = 0; i < this.list.size(); i++) {
+                final Pair<String, String> pair = this.list.get(i);
                 if (pair.getKey().equalsIgnoreCase(key)) {
-                    list.remove(i);
+                    this.list.remove(i);
                     found = true;
                     --i;
                 }
@@ -2676,10 +2480,11 @@ public class Util extends XOMUtil {
             return found;
         }
 
+        @Override
         public String toString() {
-            StringBuilder sb = new StringBuilder(64);
-            for (int i = 0, n = list.size(); i < n; i++) {
-                Pair<String, String> pair = list.get(i);
+            final StringBuilder sb = new StringBuilder(64);
+            for (int i = 0, n = this.list.size(); i < n; i++) {
+                final Pair<String, String> pair = this.list.get(i);
                 if (i > 0) {
                     sb.append("; ");
                 }
@@ -2712,8 +2517,9 @@ public class Util extends XOMUtil {
             return sb.toString();
         }
 
+        @Override
         public Iterator<Pair<String, String>> iterator() {
-            return list.iterator();
+            return this.list.iterator();
         }
     }
 
@@ -2752,9 +2558,9 @@ public class Util extends XOMUtil {
         }
 
         PropertyList parse() {
-            PropertyList list = new PropertyList();
-            while (i < n) {
-                parsePair(list);
+            final PropertyList list = new PropertyList();
+            while (this.i < this.n) {
+                this.parsePair(list);
             }
             return list;
         }
@@ -2762,18 +2568,18 @@ public class Util extends XOMUtil {
          * Reads "name=value;" or "name=value<EOF>".
          */
         void parsePair(PropertyList list) {
-            String name = parseName();
+            final String name = this.parseName();
             if (name == null) {
                 return;
             }
             String value;
-            if (i >= n) {
+            if (this.i >= this.n) {
                 value = "";
-            } else if (s.charAt(i) == ';') {
-                i++;
+            } else if (this.s.charAt(this.i) == ';') {
+                this.i++;
                 value = "";
             } else {
-                value = parseValue();
+                value = this.parseValue();
             }
             list.put(name, value);
         }
@@ -2783,40 +2589,40 @@ public class Util extends XOMUtil {
          * doubled. Returns null if there is no name to read.
          */
         String parseName() {
-            nameBuf.setLength(0);
+            this.nameBuf.setLength(0);
             while (true) {
-                char c = s.charAt(i);
+                char c = this.s.charAt(this.i);
                 switch (c) {
-                case '=':
-                    i++;
-                    if (i < n && (c = s.charAt(i)) == '=') {
-                        // doubled equals sign; take one of them, and carry on
-                        i++;
-                        nameBuf.append(c);
-                        break;
-                    }
-                    String name = nameBuf.toString();
-                    name = name.trim();
-                    return name;
-                case ' ':
-                    if (nameBuf.length() == 0) {
-                        // ignore preceding spaces
-                        i++;
-                        if (i >= n) {
-                            // there is no name, e.g. trailing spaces after
-                            // semicolon, 'x=1; y=2; '
-                            return null;
+                    case '=':
+                        this.i++;
+                        if ((this.i < this.n) && ((c = this.s.charAt(this.i)) == '=')) {
+                            // doubled equals sign; take one of them, and carry on
+                            this.i++;
+                            this.nameBuf.append(c);
+                            break;
                         }
-                        break;
-                    } else {
-                        // fall through
-                    }
-                default:
-                    nameBuf.append(c);
-                    i++;
-                    if (i >= n) {
-                        return nameBuf.toString().trim();
-                    }
+                        String name = this.nameBuf.toString();
+                        name = name.trim();
+                        return name;
+                    case ' ':
+                        if (this.nameBuf.length() == 0) {
+                            // ignore preceding spaces
+                            this.i++;
+                            if (this.i >= this.n) {
+                                // there is no name, e.g. trailing spaces after
+                                // semicolon, 'x=1; y=2; '
+                                return null;
+                            }
+                            break;
+                        } else {
+                            // fall through
+                        }
+                    default:
+                        this.nameBuf.append(c);
+                        this.i++;
+                        if (this.i >= this.n) {
+                            return this.nameBuf.toString().trim();
+                        }
                 }
             }
         }
@@ -2827,37 +2633,35 @@ public class Util extends XOMUtil {
         String parseValue() {
             char c;
             // skip over leading white space
-            while ((c = s.charAt(i)) == ' ') {
-                i++;
-                if (i >= n) {
+            while ((c = this.s.charAt(this.i)) == ' ') {
+                this.i++;
+                if (this.i >= this.n) {
                     return "";
                 }
             }
-            if (c == '"' || c == '\'') {
-                String value = parseQuoted(c);
+            if ((c == '"') || (c == '\'')) {
+                final String value = this.parseQuoted(c);
                 // skip over trailing white space
-                while (i < n && (c = s.charAt(i)) == ' ') {
-                    i++;
+                while ((this.i < this.n) && ((c = this.s.charAt(this.i)) == ' ')) {
+                    this.i++;
                 }
-                if (i >= n) {
+                if (this.i >= this.n) {
                     return value;
-                } else if (s.charAt(i) == ';') {
-                    i++;
+                } else if (this.s.charAt(this.i) == ';') {
+                    this.i++;
                     return value;
                 } else {
-                    throw new RuntimeException(
-                        "quoted value ended too soon, at position " + i
-                        + " in '" + s + "'");
+                    throw new RuntimeException("quoted value ended too soon, at position " + this.i + " in '" + this.s + "'");
                 }
             } else {
                 String value;
-                int semi = s.indexOf(';', i);
+                final int semi = this.s.indexOf(';', this.i);
                 if (semi >= 0) {
-                    value = s.substring(i, semi);
-                    i = semi + 1;
+                    value = this.s.substring(this.i, semi);
+                    this.i = semi + 1;
                 } else {
-                    value = s.substring(i);
-                    i = n;
+                    value = this.s.substring(this.i);
+                    this.i = this.n;
                 }
                 return value.trim();
             }
@@ -2869,31 +2673,29 @@ public class Util extends XOMUtil {
          * and returns <code>a "new" string</code>.
          */
         String parseQuoted(char q) {
-            char c = s.charAt(i++);
+            char c = this.s.charAt(this.i++);
             Util.assertTrue(c == q);
-            valueBuf.setLength(0);
-            while (i < n) {
-                c = s.charAt(i);
+            this.valueBuf.setLength(0);
+            while (this.i < this.n) {
+                c = this.s.charAt(this.i);
                 if (c == q) {
-                    i++;
-                    if (i < n) {
-                        c = s.charAt(i);
+                    this.i++;
+                    if (this.i < this.n) {
+                        c = this.s.charAt(this.i);
                         if (c == q) {
-                            valueBuf.append(c);
-                            i++;
+                            this.valueBuf.append(c);
+                            this.i++;
                             continue;
                         }
                     }
-                    return valueBuf.toString();
+                    return this.valueBuf.toString();
                 } else {
-                    valueBuf.append(c);
-                    i++;
+                    this.valueBuf.append(c);
+                    this.i++;
                 }
             }
             throw new RuntimeException(
-                "Connect string '" + s
-                + "' contains unterminated quoted value '" + valueBuf.toString()
-                + "'");
+                "Connect string '" + this.s + "' contains unterminated quoted value '" + this.valueBuf.toString() + "'");
         }
     }
 
@@ -2909,7 +2711,7 @@ public class Util extends XOMUtil {
      * may be null).
      */
     public static int hash(int h, Object o) {
-        int k = (o == null) ? 0 : o.hashCode();
+        final int k = (o == null) ? 0 : o.hashCode();
         return ((h << 4) | h) ^ k;
     }
 
@@ -2917,7 +2719,7 @@ public class Util extends XOMUtil {
      * Computes a hash code from an existing hash code and an array of objects
      * (which may be null).
      */
-    public static int hashArray(int h, Object [] a) {
+    public static int hashArray(int h, Object[] a) {
         // The hashcode for a null array and an empty array should be different
         // than h, so use magic numbers.
         if (a == null) {
@@ -2926,7 +2728,7 @@ public class Util extends XOMUtil {
         if (a.length == 0) {
             return hash(h, 19690721);
         }
-        for (Object anA : a) {
+        for (final Object anA : a) {
             h = hash(h, anA);
         }
         return h;
@@ -2942,17 +2744,14 @@ public class Util extends XOMUtil {
      * @param as Zero or more subsequent arrays
      * @return Array containing all elements
      */
-    public static <T> T[] appendArrays(
-        T[] a0,
-        T[]... as)
-    {
+    public static <T> T[] appendArrays(T[] a0, T[]... as) {
         int n = a0.length;
-        for (T[] a : as) {
+        for (final T[] a : as) {
             n += a.length;
         }
-        T[] copy = Util.copyOf(a0, n);
+        final T[] copy = Util.copyOf(a0, n);
         n = a0.length;
-        for (T[] a : as) {
+        for (final T[] a : as) {
             System.arraycopy(a, 0, copy, n, a.length);
             n += a.length;
         }
@@ -2970,7 +2769,7 @@ public class Util extends XOMUtil {
      * @see #appendArrays
      */
     public static <T> T[] append(T[] a, T o) {
-        T[] a2 = Util.copyOf(a, a.length + 1);
+        final T[] a2 = Util.copyOf(a, a.length + 1);
         a2[a.length] = o;
         return a2;
     }
@@ -2985,9 +2784,8 @@ public class Util extends XOMUtil {
      *     to obtain the specified length
      */
     public static double[] copyOf(double[] original, int newLength) {
-        double[] copy = new double[newLength];
-        System.arraycopy(
-            original, 0, copy, 0, Math.min(original.length, newLength));
+        final double[] copy = new double[newLength];
+        System.arraycopy(original, 0, copy, 0, Math.min(original.length, newLength));
         return copy;
     }
 
@@ -3001,9 +2799,8 @@ public class Util extends XOMUtil {
      *     to obtain the specified length
      */
     public static int[] copyOf(int[] original, int newLength) {
-        int[] copy = new int[newLength];
-        System.arraycopy(
-            original, 0, copy, 0, Math.min(original.length, newLength));
+        final int[] copy = new int[newLength];
+        System.arraycopy(original, 0, copy, 0, Math.min(original.length, newLength));
         return copy;
     }
 
@@ -3017,9 +2814,8 @@ public class Util extends XOMUtil {
      *     to obtain the specified length
      */
     public static long[] copyOf(long[] original, int newLength) {
-        long[] copy = new long[newLength];
-        System.arraycopy(
-            original, 0, copy, 0, Math.min(original.length, newLength));
+        final long[] copy = new long[newLength];
+        System.arraycopy(original, 0, copy, 0, Math.min(original.length, newLength));
         return copy;
     }
 
@@ -3046,17 +2842,12 @@ public class Util extends XOMUtil {
      * @return a copy of the original array, truncated or padded with nulls
      *     to obtain the specified length
      */
-    public static <T, U> T[] copyOf(
-        U[] original, int newLength, Class<? extends T[]> newType)
-    {
-        @SuppressWarnings({"unchecked", "RedundantCast"})
-        T[] copy = ((Object)newType == (Object)Object[].class)
-            ? (T[]) new Object[newLength]
+    public static <T, U> T[] copyOf(U[] original, int newLength, Class<? extends T[]> newType) {
+        @SuppressWarnings({ "unchecked", "RedundantCast" })
+        final T[] copy = ((Object) newType == (Object) Object[].class) ? (T[]) new Object[newLength]
             : (T[]) Array.newInstance(newType.getComponentType(), newLength);
         //noinspection SuspiciousSystemArraycopy
-        System.arraycopy(
-            original, 0, copy, 0,
-            Math.min(original.length, newLength));
+        System.arraycopy(original, 0, copy, 0, Math.min(original.length, newLength));
         return copy;
     }
 
@@ -3067,6 +2858,7 @@ public class Util extends XOMUtil {
      *  {@link mondrian.server.monitor.ServerInfo#sqlStatementExecuteNanos};
      *  will be removed in 4.0.
      */
+    @Deprecated
     public static long dbTimeMillis() {
         return databaseMillis;
     }
@@ -3076,6 +2868,7 @@ public class Util extends XOMUtil {
      *
      * @deprecated Will be removed in 4.0.
      */
+    @Deprecated
     public static void addDatabaseTime(long millis) {
         databaseMillis += millis;
     }
@@ -3088,6 +2881,7 @@ public class Util extends XOMUtil {
      *
      * @deprecated Will be removed in 4.0.
      */
+    @Deprecated
     public static long nonDbTimeMillis() {
         final long systemMillis = System.currentTimeMillis();
         return systemMillis - databaseMillis;
@@ -3099,71 +2893,72 @@ public class Util extends XOMUtil {
      */
     public static Validator createSimpleValidator(final FunTable funTable) {
         return new Validator() {
+            @Override
             public Query getQuery() {
                 return null;
             }
 
+            @Override
             public SchemaReader getSchemaReader() {
                 throw new UnsupportedOperationException();
             }
 
+            @Override
             public Exp validate(Exp exp, boolean scalar) {
                 return exp;
             }
 
+            @Override
             public void validate(ParameterExpr parameterExpr) {
             }
 
+            @Override
             public void validate(MemberProperty memberProperty) {
             }
 
+            @Override
             public void validate(QueryAxis axis) {
             }
 
+            @Override
             public void validate(Formula formula) {
             }
 
+            @Override
             public FunDef getDef(Exp[] args, String name, Syntax syntax) {
                 // Very simple resolution. Assumes that there is precisely
                 // one resolver (i.e. no overloading) and no argument
                 // conversions are necessary.
-                List<Resolver> resolvers = funTable.getResolvers(name, syntax);
+                final List<Resolver> resolvers = funTable.getResolvers(name, syntax);
                 final Resolver resolver = resolvers.get(0);
-                final List<Resolver.Conversion> conversionList =
-                    new ArrayList<Resolver.Conversion>();
-                final FunDef def =
-                    resolver.resolve(args, this, conversionList);
+                final List<Resolver.Conversion> conversionList = new ArrayList<Resolver.Conversion>();
+                final FunDef def = resolver.resolve(args, this, conversionList);
                 assert conversionList.isEmpty();
                 return def;
             }
 
+            @Override
             public boolean alwaysResolveFunDef() {
                 return false;
             }
 
-            public boolean canConvert(
-                int ordinal, Exp fromExp,
-                int to,
-                List<Resolver.Conversion> conversions)
-            {
+            @Override
+            public boolean canConvert(int ordinal, Exp fromExp, int to, List<Resolver.Conversion> conversions) {
                 return true;
             }
 
+            @Override
             public boolean requiresExpression() {
                 return false;
             }
 
+            @Override
             public FunTable getFunTable() {
                 return funTable;
             }
 
-            public Parameter createOrLookupParam(
-                boolean definition,
-                String name,
-                Type type,
-                Exp defaultExp,
-                String description)
-            {
+            @Override
+            public Parameter createOrLookupParam(boolean definition, String name, Type type, Exp defaultExp, String description) {
                 return null;
             }
         };
@@ -3178,11 +2973,9 @@ public class Util extends XOMUtil {
      * @throws IOException on I/O error
      */
     public static String readFully(final Reader rdr, final int bufferSize)
-        throws IOException
-    {
+        throws IOException {
         if (bufferSize <= 0) {
-            throw new IllegalArgumentException(
-                "Buffer size must be greater than 0");
+            throw new IllegalArgumentException("Buffer size must be greater than 0");
         }
 
         final char[] buffer = new char[bufferSize];
@@ -3205,16 +2998,13 @@ public class Util extends XOMUtil {
      * @throws IOException on I/O error
      */
     public static byte[] readFully(final InputStream in, final int bufferSize)
-        throws IOException
-    {
+        throws IOException {
         if (bufferSize <= 0) {
-            throw new IllegalArgumentException(
-                "Buffer size must be greater than 0");
+            throw new IllegalArgumentException("Buffer size must be greater than 0");
         }
 
         final byte[] buffer = new byte[bufferSize];
-        final ByteArrayOutputStream baos =
-            new ByteArrayOutputStream(bufferSize);
+        final ByteArrayOutputStream baos = new ByteArrayOutputStream(bufferSize);
 
         int len;
         while ((len = in.read(buffer)) != -1) {
@@ -3238,8 +3028,7 @@ public class Util extends XOMUtil {
      * @throws IOException on I/O error
      */
     public static String readURL(final String urlStr, Map<String, String> map)
-        throws IOException
-    {
+        throws IOException {
         if (urlStr.startsWith("inline:")) {
             String content = urlStr.substring("inline:".length());
             if (map != null) {
@@ -3259,7 +3048,8 @@ public class Util extends XOMUtil {
      * @return Contents of URL
      * @throws IOException on I/O error
      */
-    public static String readURL(final URL url) throws IOException {
+    public static String readURL(final URL url)
+        throws IOException {
         return readURL(url, null);
     }
 
@@ -3274,13 +3064,9 @@ public class Util extends XOMUtil {
      * @return Contents of URL with tokens substituted
      * @throws IOException on I/O error
      */
-    public static String readURL(
-        final URL url,
-        Map<String, String> map)
-        throws IOException
-    {
-        final Reader r =
-            new BufferedReader(new InputStreamReader(url.openStream()));
+    public static String readURL(final URL url, Map<String, String> map)
+        throws IOException {
+        final Reader r = new BufferedReader(new InputStreamReader(url.openStream()));
         final int BUF_SIZE = 8096;
         try {
             String xmlCatalog = readFully(r, BUF_SIZE);
@@ -3296,15 +3082,14 @@ public class Util extends XOMUtil {
      *
      * @param url String
      * @return Apache VFS FileContent for further processing
-     * @throws FileSystemException on error
+     * @throws org.apache.commons.vfs.FileSystemException on error
      */
     public static InputStream readVirtualFile(String url)
-        throws FileSystemException
-    {
+        throws org.apache.commons.vfs.FileSystemException {
         // Treat catalogUrl as an Apache VFS (Virtual File System) URL.
         // VFS handles all of the usual protocols (http:, file:)
         // and then some.
-        FileSystemManager fsManager = VFS.getManager();
+        final org.apache.commons.vfs.FileSystemManager fsManager = org.apache.commons.vfs.VFS.getManager();
         if (fsManager == null) {
             throw newError("Cannot get virtual file system manager");
         }
@@ -3322,15 +3107,14 @@ public class Util extends XOMUtil {
         if (url.startsWith("http")) {
             try {
                 return new URL(url).openStream();
-            } catch (IOException e) {
-                throw newError(
-                    "Could not read URL: " + url);
+            } catch (final IOException e) {
+                throw newError("Could not read URL: " + url);
             }
         }
 
-        File userDir = new File("").getAbsoluteFile();
-        FileObject file = fsManager.resolveFile(userDir, url);
-        FileContent fileContent = null;
+        final File userDir = new File("").getAbsoluteFile();
+        org.apache.commons.vfs.FileObject file = fsManager.resolveFile(userDir, url);
+        org.apache.commons.vfs.FileContent fileContent = null;
         try {
             // Because of VFS caching, make sure we refresh to get the latest
             // file content. This refresh may possibly solve the following
@@ -3343,18 +3127,14 @@ public class Util extends XOMUtil {
             // cache bug can cause it to treat URLs with different parameters
             // as the same file (e.g. http://blah.com?param=A,
             // http://blah.com?param=B)
-            if (file instanceof HttpFileObject
-                && !file.getName().getURI().equals(url))
-            {
-                fsManager.getFilesCache().removeFile(
-                    file.getFileSystem(),  file.getName());
+            if ((file instanceof org.apache.commons.vfs.provider.http.HttpFileObject) && !file.getName().getURI().equals(url)) {
+                fsManager.getFilesCache().removeFile(file.getFileSystem(), file.getName());
 
                 file = fsManager.resolveFile(userDir, url);
             }
 
             if (!file.isReadable()) {
-                throw newError(
-                    "Virtual file is not readable: " + url);
+                throw newError("Virtual file is not readable: " + url);
             }
 
             fileContent = file.getContent();
@@ -3363,22 +3143,19 @@ public class Util extends XOMUtil {
         }
 
         if (fileContent == null) {
-            throw newError(
-                "Cannot get virtual file content: " + url);
+            throw newError("Cannot get virtual file content: " + url);
         }
 
         return fileContent.getInputStream();
     }
 
-    public static String readVirtualFileAsString(
-        String catalogUrl)
-        throws IOException
-    {
-        InputStream in = readVirtualFile(catalogUrl);
+    public static String readVirtualFileAsString(String catalogUrl)
+        throws java.io.IOException {
+        final InputStream in = readVirtualFile(catalogUrl);
         try {
-            return IOUtils.toString(in);
+            return org.apache.commons.io.IOUtils.toString(in);
         } finally {
-            IOUtils.closeQuietly(in);
+            org.apache.commons.io.IOUtils.closeQuietly(in);
         }
     }
 
@@ -3390,7 +3167,8 @@ public class Util extends XOMUtil {
      */
     public static Map<String, String> toMap(final Properties properties) {
         return new AbstractMap<String, String>() {
-            @SuppressWarnings({"unchecked"})
+            @Override
+            @SuppressWarnings({ "unchecked" })
             public Set<Entry<String, String>> entrySet() {
                 return (Set) properties.entrySet();
             }
@@ -3406,19 +3184,16 @@ public class Util extends XOMUtil {
      * @param env Map of key-value pairs
      * @return String with tokens substituted
      */
-    public static String replaceProperties(
-        String text,
-        Map<String, String> env)
-    {
+    public static String replaceProperties(String text, Map<String, String> env) {
         // As of JDK 1.5, cannot use StringBuilder - appendReplacement requires
         // the antediluvian StringBuffer.
-        StringBuffer buf = new StringBuffer(text.length() + 200);
+        final StringBuffer buf = new StringBuffer(text.length() + 200);
 
-        Pattern pattern = Pattern.compile("\\$\\{([^${}]+)\\}");
-        Matcher matcher = pattern.matcher(text);
+        final Pattern pattern = Pattern.compile("\\$\\{([^${}]+)\\}");
+        final Matcher matcher = pattern.matcher(text);
         while (matcher.find()) {
-            String varName = matcher.group(1);
-            String varValue = env.get(varName);
+            final String varName = matcher.group(1);
+            final String varValue = env.get(varName);
             if (varValue != null) {
                 matcher.appendReplacement(buf, varValue);
             } else {
@@ -3470,7 +3245,7 @@ public class Util extends XOMUtil {
      * @param set Set
      * @return Set of desired type
      */
-    @SuppressWarnings({"unchecked"})
+    @SuppressWarnings({ "unchecked" })
     public static <T> Set<T> cast(Set<?> set) {
         return (Set<T>) set;
     }
@@ -3481,7 +3256,7 @@ public class Util extends XOMUtil {
      * @param list List
      * @return List of desired type
      */
-    @SuppressWarnings({"unchecked"})
+    @SuppressWarnings({ "unchecked" })
     public static <T> List<T> cast(List<?> list) {
         return (List<T>) list;
     }
@@ -3496,12 +3271,9 @@ public class Util extends XOMUtil {
      * @return Whether all not-null elements of the collection are instances of
      *   element type
      */
-    public static <T> boolean canCast(
-        Collection<?> collection,
-        Class<T> clazz)
-    {
-        for (Object o : collection) {
-            if (o != null && !clazz.isInstance(o)) {
+    public static <T> boolean canCast(Collection<?> collection, Class<T> clazz) {
+        for (final Object o : collection) {
+            if ((o != null) && !clazz.isInstance(o)) {
                 return false;
             }
         }
@@ -3525,13 +3297,10 @@ public class Util extends XOMUtil {
      * @param <T> Element type
      * @return Object cast to Iterable
      */
-    public static <T> Iterable<T> castToIterable(
-        final Object iterable)
-    {
-        if (Util.Retrowoven
-            && !(iterable instanceof Iterable))
-        {
+    public static <T> Iterable<T> castToIterable(final Object iterable) {
+        if (Util.Retrowoven && !(iterable instanceof Iterable)) {
             return new Iterable<T>() {
+                @Override
                 public Iterator<T> iterator() {
                     return ((Collection<T>) iterable).iterator();
                 }
@@ -3559,15 +3328,13 @@ public class Util extends XOMUtil {
      * @param defaultValue Default value if constant is not found
      * @return Value, or null if name is null or value does not exist
      */
-    public static <E extends Enum<E>> E lookup(
-        Class<E> clazz, String name, E defaultValue)
-    {
+    public static <E extends Enum<E>> E lookup(Class<E> clazz, String name, E defaultValue) {
         if (name == null) {
             return defaultValue;
         }
         try {
             return Enum.valueOf(clazz, name);
-        } catch (IllegalArgumentException e) {
+        } catch (final IllegalArgumentException e) {
             return defaultValue;
         }
     }
@@ -3619,11 +3386,7 @@ public class Util extends XOMUtil {
      * @param <T> Interface
      * @return Object that implements given interface
      */
-    public static <T> T compileScript(
-        Class<T> iface,
-        String script,
-        String engineName)
-    {
+    public static <T> T compileScript(Class<T> iface, String script, String engineName) {
         return compatible.compileScript(iface, script, engineName);
     }
 
@@ -3658,17 +3421,11 @@ public class Util extends XOMUtil {
      * @param functionName Function name, or null
      * @return an instance of UserDefinedFunction
      */
-    public static UserDefinedFunction createUdf(
-        Class<? extends UserDefinedFunction> udfClass,
-        String functionName)
-    {
+    public static UserDefinedFunction createUdf(Class<? extends UserDefinedFunction> udfClass, String functionName) {
         // Instantiate class with default constructor.
         UserDefinedFunction udf;
-        String className = udfClass.getName();
-        String functionNameOrEmpty =
-            functionName == null
-                ? ""
-                : functionName;
+        final String className = udfClass.getName();
+        final String functionNameOrEmpty = functionName == null ? "" : functionName;
 
         // Find a constructor.
         Constructor<?> constructor;
@@ -3676,23 +3433,19 @@ public class Util extends XOMUtil {
 
         // 0. Check that class is public and top-level or static.
         if (!Modifier.isPublic(udfClass.getModifiers())
-                || (udfClass.getEnclosingClass() != null
-                    && !Modifier.isStatic(udfClass.getModifiers())))
-        {
-            throw MondrianResource.instance().UdfClassMustBePublicAndStatic.ex(
-                functionName,
-                className);
+            || ((udfClass.getEnclosingClass() != null) && !Modifier.isStatic(udfClass.getModifiers()))) {
+            throw MondrianResource.instance().UdfClassMustBePublicAndStatic.ex(functionName, className);
         }
 
         // 1. Look for a constructor "public Udf(String name)".
         try {
             constructor = udfClass.getConstructor(String.class);
             if (Modifier.isPublic(constructor.getModifiers())) {
-                args = new Object[] {functionName};
+                args = new Object[] { functionName };
             } else {
                 constructor = null;
             }
-        } catch (NoSuchMethodException e) {
+        } catch (final NoSuchMethodException e) {
             constructor = null;
         }
         // 2. Otherwise, look for a constructor "public Udf()".
@@ -3704,39 +3457,25 @@ public class Util extends XOMUtil {
                 } else {
                     constructor = null;
                 }
-            } catch (NoSuchMethodException e) {
+            } catch (final NoSuchMethodException e) {
                 constructor = null;
             }
         }
         // 3. Else, no constructor suitable.
         if (constructor == null) {
-            throw MondrianResource.instance().UdfClassWrongIface.ex(
-                functionNameOrEmpty,
-                className,
-                UserDefinedFunction.class.getName());
+            throw MondrianResource.instance().UdfClassWrongIface.ex(functionNameOrEmpty, className, UserDefinedFunction.class.getName());
         }
         // Instantiate class.
         try {
             udf = (UserDefinedFunction) constructor.newInstance(args);
-        } catch (InstantiationException e) {
-            throw MondrianResource.instance().UdfClassWrongIface.ex(
-                functionNameOrEmpty,
-                className, UserDefinedFunction.class.getName());
-        } catch (IllegalAccessException e) {
-            throw MondrianResource.instance().UdfClassWrongIface.ex(
-                functionName,
-                className,
-                UserDefinedFunction.class.getName());
-        } catch (ClassCastException e) {
-            throw MondrianResource.instance().UdfClassWrongIface.ex(
-                functionNameOrEmpty,
-                className,
-                UserDefinedFunction.class.getName());
-        } catch (InvocationTargetException e) {
-            throw MondrianResource.instance().UdfClassWrongIface.ex(
-                functionName,
-                className,
-                UserDefinedFunction.class.getName());
+        } catch (final InstantiationException e) {
+            throw MondrianResource.instance().UdfClassWrongIface.ex(functionNameOrEmpty, className, UserDefinedFunction.class.getName());
+        } catch (final IllegalAccessException e) {
+            throw MondrianResource.instance().UdfClassWrongIface.ex(functionName, className, UserDefinedFunction.class.getName());
+        } catch (final ClassCastException e) {
+            throw MondrianResource.instance().UdfClassWrongIface.ex(functionNameOrEmpty, className, UserDefinedFunction.class.getName());
+        } catch (final InvocationTargetException e) {
+            throw MondrianResource.instance().UdfClassWrongIface.ex(functionName, className, UserDefinedFunction.class.getName());
         }
 
         return udf;
@@ -3755,20 +3494,18 @@ public class Util extends XOMUtil {
      * @throws ResourceLimitExceededException
      */
     public static void checkCJResultLimit(long resultSize) {
-        int resultLimit = MondrianProperties.instance().ResultLimit.get();
+        final int resultLimit = mondrian.olap.MondrianProperties.instance().ResultLimit.get();
 
         // Throw an exeption, if the size of the crossjoin exceeds the result
         // limit.
-        if (resultLimit > 0 && resultLimit < resultSize) {
-            throw MondrianResource.instance().LimitExceededDuringCrossjoin.ex(
-                resultSize, resultLimit);
+        if ((resultLimit > 0) && (resultLimit < resultSize)) {
+            throw MondrianResource.instance().LimitExceededDuringCrossjoin.ex(resultSize, resultLimit);
         }
 
         // Throw an exception if the crossjoin exceeds a reasonable limit.
         // (Yes, 4 billion is a reasonable limit.)
         if (resultSize > Integer.MAX_VALUE) {
-            throw MondrianResource.instance().LimitExceededDuringCrossjoin.ex(
-                resultSize, Integer.MAX_VALUE);
+            throw MondrianResource.instance().LimitExceededDuringCrossjoin.ex(resultSize, Integer.MAX_VALUE);
         }
     }
 
@@ -3789,12 +3526,9 @@ public class Util extends XOMUtil {
      * @param url olap4j connect string
      * @return mondrian connect string, or null if cannot be converted
      */
-    public static String convertOlap4jConnectStringToNativeMondrian(
-        String url)
-    {
+    public static String convertOlap4jConnectStringToNativeMondrian(String url) {
         if (url.startsWith("jdbc:mondrian:")) {
-            return "Provider=Mondrian; "
-                + url.substring("jdbc:mondrian:".length());
+            return "Provider=Mondrian; " + url.substring("jdbc:mondrian:".length());
         }
         return null;
     }
@@ -3817,7 +3551,7 @@ public class Util extends XOMUtil {
      */
     public static boolean isBlank(String str) {
         final int strLen;
-        if (str == null || (strLen = str.length()) == 0) {
+        if ((str == null) || ((strLen = str.length()) == 0)) {
             return true;
         }
         for (int i = 0; i < strLen; i++) {
@@ -3834,7 +3568,7 @@ public class Util extends XOMUtil {
      * @return A role with root access to the schema.
      */
     public static Role createRootRole(Schema schema) {
-        RoleImpl role = new RoleImpl();
+        final RoleImpl role = new RoleImpl();
         role.grant(schema, Access.ALL);
         role.makeImmutable();
         return role;
@@ -3848,8 +3582,8 @@ public class Util extends XOMUtil {
      */
     public static Cube getDimensionCube(Dimension dimension) {
         final Cube[] cubes = dimension.getSchema().getCubes();
-        for (Cube cube : cubes) {
-            for (Dimension dimension1 : cube.getDimensions()) {
+        for (final Cube cube : cubes) {
+            for (final Dimension dimension1 : cube.getDimensions()) {
                 // If the dimensions have the same identity,
                 // we found an access rule.
                 if (dimension == dimension1) {
@@ -3859,20 +3593,13 @@ public class Util extends XOMUtil {
                 // RolapCubeDimension, we must validate the cube
                 // assignment and make sure the cubes are the same.
                 // If not, skip to the next grant.
-                if (dimension instanceof RolapCubeDimension
-                    && dimension.equals(dimension1)
-                    && !((RolapCubeDimension)dimension1)
-                    .getCube()
-                    .equals(cube))
-                {
+                if ((dimension instanceof RolapCubeDimension) && dimension.equals(dimension1)
+                    && !((RolapCubeDimension) dimension1).getCube().equals(cube)) {
                     continue;
                 }
                 // Last thing is to allow for equality correspondences
                 // to work with virtual cubes.
-                if (cube instanceof RolapCube
-                    && ((RolapCube)cube).isVirtual()
-                    && dimension.equals(dimension1))
-                {
+                if ((cube instanceof RolapCube) && ((RolapCube) cube).isVirtual() && dimension.equals(dimension1)) {
                     return cube;
                 }
             }
@@ -3898,12 +3625,11 @@ public class Util extends XOMUtil {
         URL resource = null;
         try {
             // The last resource will be from the nearest ClassLoader.
-            Enumeration<URL> resourceCandidates =
-                classLoader.getResources(name);
+            final Enumeration<URL> resourceCandidates = classLoader.getResources(name);
             while (resourceCandidates.hasMoreElements()) {
                 resource = resourceCandidates.nextElement();
             }
-        } catch (IOException ioe) {
+        } catch (final IOException ioe) {
             // ignore exception - it's OK if file is not found
             // just keep getResource contract and return null
             Util.discard(ioe);
@@ -3911,84 +3637,99 @@ public class Util extends XOMUtil {
         return resource;
     }
 
-    public static abstract class AbstractFlatList<T>
-        implements List<T>, RandomAccess
-    {
+    public static abstract class AbstractFlatList<T> implements List<T>, RandomAccess {
         protected final List<T> asArrayList() {
             //noinspection unchecked
-            return Arrays.asList((T[]) toArray());
+            return Arrays.asList((T[]) this.toArray());
         }
 
+        @Override
         public Iterator<T> iterator() {
-            return asArrayList().iterator();
+            return this.asArrayList().iterator();
         }
 
+        @Override
         public ListIterator<T> listIterator() {
-            return asArrayList().listIterator();
+            return this.asArrayList().listIterator();
         }
 
+        @Override
         public boolean isEmpty() {
             return false;
         }
 
+        @Override
         public boolean add(Object t) {
             throw new UnsupportedOperationException();
         }
 
+        @Override
         public boolean addAll(Collection<? extends T> c) {
             throw new UnsupportedOperationException();
         }
 
+        @Override
         public boolean addAll(int index, Collection<? extends T> c) {
             throw new UnsupportedOperationException();
         }
 
+        @Override
         public boolean removeAll(Collection<?> c) {
             throw new UnsupportedOperationException();
         }
 
+        @Override
         public boolean retainAll(Collection<?> c) {
             throw new UnsupportedOperationException();
         }
 
+        @Override
         public void clear() {
             throw new UnsupportedOperationException();
         }
 
+        @Override
         public T set(int index, Object element) {
             throw new UnsupportedOperationException();
         }
 
+        @Override
         public void add(int index, Object element) {
             throw new UnsupportedOperationException();
         }
 
+        @Override
         public T remove(int index) {
             throw new UnsupportedOperationException();
         }
 
+        @Override
         public ListIterator<T> listIterator(int index) {
-            return asArrayList().listIterator(index);
+            return this.asArrayList().listIterator(index);
         }
 
+        @Override
         public List<T> subList(int fromIndex, int toIndex) {
-            return asArrayList().subList(fromIndex, toIndex);
+            return this.asArrayList().subList(fromIndex, toIndex);
         }
 
+        @Override
         public boolean contains(Object o) {
-            return indexOf(o) >= 0;
+            return this.indexOf(o) >= 0;
         }
 
+        @Override
         public boolean containsAll(Collection<?> c) {
-            Iterator<?> e = c.iterator();
+            final Iterator<?> e = c.iterator();
             while (e.hasNext()) {
-                if (!contains(e.next())) {
+                if (!this.contains(e.next())) {
                     return false;
                 }
             }
             return true;
         }
 
+        @Override
         public boolean remove(Object o) {
             throw new UnsupportedOperationException();
         }
@@ -4020,70 +3761,78 @@ public class Util extends XOMUtil {
             assert t1 != null;
         }
 
+        @Override
         public String toString() {
-            return "[" + t0 + ", " + t1 + "]";
+            return "[" + this.t0 + ", " + this.t1 + "]";
         }
 
+        @Override
         public T get(int index) {
             switch (index) {
-            case 0:
-                return t0;
-            case 1:
-                return t1;
-            default:
-                throw new IndexOutOfBoundsException("index " + index);
+                case 0:
+                    return this.t0;
+                case 1:
+                    return this.t1;
+                default:
+                    throw new IndexOutOfBoundsException("index " + index);
             }
         }
 
+        @Override
         public int size() {
             return 2;
         }
 
+        @Override
         public boolean equals(Object o) {
             if (o instanceof Flat2List) {
-                Flat2List that = (Flat2List) o;
-                return Util.equals(this.t0, that.t0)
-                    && Util.equals(this.t1, that.t1);
+                final Flat2List that = (Flat2List) o;
+                return Util.equals(this.t0, that.t0) && Util.equals(this.t1, that.t1);
             }
-            return Arrays.asList(t0, t1).equals(o);
+            return Arrays.asList(this.t0, this.t1).equals(o);
         }
 
+        @Override
         public int hashCode() {
             int h = 1;
-            h = h * 31 + t0.hashCode();
-            h = h * 31 + t1.hashCode();
+            h = (h * 31) + this.t0.hashCode();
+            h = (h * 31) + this.t1.hashCode();
             return h;
         }
 
+        @Override
         public int indexOf(Object o) {
-            if (t0.equals(o)) {
+            if (this.t0.equals(o)) {
                 return 0;
             }
-            if (t1.equals(o)) {
+            if (this.t1.equals(o)) {
                 return 1;
             }
             return -1;
         }
 
+        @Override
         public int lastIndexOf(Object o) {
-            if (t1.equals(o)) {
+            if (this.t1.equals(o)) {
                 return 1;
             }
-            if (t0.equals(o)) {
+            if (this.t0.equals(o)) {
                 return 0;
             }
             return -1;
         }
 
-        @SuppressWarnings({"unchecked"})
+        @Override
+        @SuppressWarnings({ "unchecked" })
         public <T2> T2[] toArray(T2[] a) {
-            a[0] = (T2) t0;
-            a[1] = (T2) t1;
+            a[0] = (T2) this.t0;
+            a[1] = (T2) this.t1;
             return a;
         }
 
+        @Override
         public Object[] toArray() {
-            return new Object[] {t0, t1};
+            return new Object[] { this.t0, this.t1 };
         }
     }
 
@@ -4116,81 +3865,88 @@ public class Util extends XOMUtil {
             assert t2 != null;
         }
 
+        @Override
         public String toString() {
-            return "[" + t0 + ", " + t1 + ", " + t2 + "]";
+            return "[" + this.t0 + ", " + this.t1 + ", " + this.t2 + "]";
         }
 
+        @Override
         public T get(int index) {
             switch (index) {
-            case 0:
-                return t0;
-            case 1:
-                return t1;
-            case 2:
-                return t2;
-            default:
-                throw new IndexOutOfBoundsException("index " + index);
+                case 0:
+                    return this.t0;
+                case 1:
+                    return this.t1;
+                case 2:
+                    return this.t2;
+                default:
+                    throw new IndexOutOfBoundsException("index " + index);
             }
         }
 
+        @Override
         public int size() {
             return 3;
         }
 
+        @Override
         public boolean equals(Object o) {
             if (o instanceof Flat3List) {
-                Flat3List that = (Flat3List) o;
-                return Util.equals(this.t0, that.t0)
-                    && Util.equals(this.t1, that.t1)
-                    && Util.equals(this.t2, that.t2);
+                final Flat3List that = (Flat3List) o;
+                return Util.equals(this.t0, that.t0) && Util.equals(this.t1, that.t1) && Util.equals(this.t2, that.t2);
             }
             return o.equals(this);
         }
 
+        @Override
         public int hashCode() {
             int h = 1;
-            h = h * 31 + t0.hashCode();
-            h = h * 31 + t1.hashCode();
-            h = h * 31 + t2.hashCode();
+            h = (h * 31) + this.t0.hashCode();
+            h = (h * 31) + this.t1.hashCode();
+            h = (h * 31) + this.t2.hashCode();
             return h;
         }
 
+        @Override
         public int indexOf(Object o) {
-            if (t0.equals(o)) {
+            if (this.t0.equals(o)) {
                 return 0;
             }
-            if (t1.equals(o)) {
+            if (this.t1.equals(o)) {
                 return 1;
             }
-            if (t2.equals(o)) {
+            if (this.t2.equals(o)) {
                 return 2;
             }
             return -1;
         }
 
+        @Override
         public int lastIndexOf(Object o) {
-            if (t2.equals(o)) {
+            if (this.t2.equals(o)) {
                 return 2;
             }
-            if (t1.equals(o)) {
+            if (this.t1.equals(o)) {
                 return 1;
             }
-            if (t0.equals(o)) {
+            if (this.t0.equals(o)) {
                 return 0;
             }
             return -1;
         }
 
-        @SuppressWarnings({"unchecked"})
+        @Override
+        @SuppressWarnings({ "unchecked" })
         public <T2> T2[] toArray(T2[] a) {
-            a[0] = (T2) t0;
-            a[1] = (T2) t1;
-            a[2] = (T2) t2;
+            a[0] = (T2) this.t0;
+            a[1] = (T2) this.t1;
+            a[2] = (T2) this.t2;
             return a;
         }
 
+        @Override
         public Object[] toArray() {
-            return new Object[] {t0, t1, t2};
+            return new Object[] { this.t0, this.t1, this.t2 };
         }
     }
 
@@ -4209,7 +3965,7 @@ public class Util extends XOMUtil {
         public GcIterator(Iterator<? extends Reference<T>> iterator) {
             this.iterator = iterator;
             this.hasNext = true;
-            moveToNext();
+            this.moveToNext();
         }
 
         /**
@@ -4219,10 +3975,9 @@ public class Util extends XOMUtil {
          * @param <T2> element type
          * @return iterable over collection
          */
-        public static <T2> Iterable<T2> over(
-            final Iterable<? extends Reference<T2>> referenceIterable)
-        {
+        public static <T2> Iterable<T2> over(final Iterable<? extends Reference<T2>> referenceIterable) {
             return new Iterable<T2>() {
+                @Override
                 public Iterator<T2> iterator() {
                     return new GcIterator<T2>(referenceIterable.iterator());
                 }
@@ -4230,27 +3985,30 @@ public class Util extends XOMUtil {
         }
 
         private void moveToNext() {
-            while (iterator.hasNext()) {
-                final Reference<T> ref = iterator.next();
-                next = ref.get();
-                if (next != null) {
+            while (this.iterator.hasNext()) {
+                final Reference<T> ref = this.iterator.next();
+                this.next = ref.get();
+                if (this.next != null) {
                     return;
                 }
-                iterator.remove();
+                this.iterator.remove();
             }
-            hasNext = false;
+            this.hasNext = false;
         }
 
+        @Override
         public boolean hasNext() {
-            return hasNext;
+            return this.hasNext;
         }
 
+        @Override
         public T next() {
-            final T next1 = next;
-            moveToNext();
+            final T next1 = this.next;
+            this.moveToNext();
             return next1;
         }
 
+        @Override
         public void remove() {
             throw new UnsupportedOperationException();
         }
@@ -4265,12 +4023,12 @@ public class Util extends XOMUtil {
         return IDENTITY_FUNCTOR;
     }
 
-    private static final Functor1 IDENTITY_FUNCTOR =
-        new Functor1<Object, Object>() {
-            public Object apply(Object param) {
-                return param;
-            }
-        };
+    private static final Functor1 IDENTITY_FUNCTOR = new Functor1<Object, Object>() {
+        @Override
+        public Object apply(Object param) {
+            return param;
+        }
+    };
 
     public static <PT> Functor1<Boolean, PT> trueFunctor() {
         //noinspection unchecked
@@ -4282,19 +4040,19 @@ public class Util extends XOMUtil {
         return FALSE_FUNCTOR;
     }
 
-    private static final Functor1 TRUE_FUNCTOR =
-        new Functor1<Boolean, Object>() {
-            public Boolean apply(Object param) {
-                return true;
-            }
-        };
+    private static final Functor1 TRUE_FUNCTOR = new Functor1<Boolean, Object>() {
+        @Override
+        public Boolean apply(Object param) {
+            return true;
+        }
+    };
 
-    private static final Functor1 FALSE_FUNCTOR =
-        new Functor1<Boolean, Object>() {
-            public Boolean apply(Object param) {
-                return false;
-            }
-        };
+    private static final Functor1 FALSE_FUNCTOR = new Functor1<Boolean, Object>() {
+        @Override
+        public Boolean apply(Object param) {
+            return false;
+        }
+    };
 
     /**
      * Information about memory usage.
@@ -4315,15 +4073,13 @@ public class Util extends XOMUtil {
      * A {@link Comparator} implementation which can deal
      * correctly with {@link RolapUtil#sqlNullValue}.
      */
-    public static class SqlNullSafeComparator
-        implements Comparator<Comparable>
-    {
-        public static final SqlNullSafeComparator instance =
-            new SqlNullSafeComparator();
+    public static class SqlNullSafeComparator implements Comparator<Comparable> {
+        public static final SqlNullSafeComparator instance = new SqlNullSafeComparator();
 
         private SqlNullSafeComparator() {
         }
 
+        @Override
         public int compare(Comparable o1, Comparable o2) {
             if (o1 == RolapUtil.sqlNullValue) {
                 return -1;
@@ -4342,9 +4098,10 @@ public class Util extends XOMUtil {
     public static class ByteMatcher {
         private final int[] matcher;
         public final byte[] key;
+
         public ByteMatcher(byte[] key) {
             this.key = key;
-            this.matcher = compile(key);
+            this.matcher = this.compile(key);
         }
         /**
          * Matches the pre-compiled byte array token against a
@@ -4356,24 +4113,23 @@ public class Util extends XOMUtil {
         public int match(byte[] a) {
             int j = 0;
             for (int i = 0; i < a.length; i++) {
-                while (j > 0 && key[j] != a[i]) {
-                    j = matcher[j - 1];
+                while ((j > 0) && (this.key[j] != a[i])) {
+                    j = this.matcher[j - 1];
                 }
-                if (a[i] == key[j]) {
+                if (a[i] == this.key[j]) {
                     j++;
                 }
-                if (key.length == j) {
-                    return
-                        i - key.length + 1;
+                if (this.key.length == j) {
+                    return (i - this.key.length) + 1;
                 }
             }
             return -1;
         }
         private int[] compile(byte[] key) {
-            int[] matcher = new int[key.length];
+            final int[] matcher = new int[key.length];
             int j = 0;
             for (int i = 1; i < key.length; i++) {
-                while (j > 0 && key[j] != key[i]) {
+                while ((j > 0) && (key[j] != key[i])) {
                     j = matcher[j - 1];
                 }
                 if (key[i] == key[j]) {
@@ -4405,36 +4161,44 @@ public class Util extends XOMUtil {
 
     private static class NullValuesMap<K, V> extends AbstractMap<K, V> {
         private final List<K> list;
+
         private NullValuesMap(List<K> list) {
             super();
             this.list = Collections.unmodifiableList(list);
         }
+        @Override
         public Set<Entry<K, V>> entrySet() {
             return new AbstractSet<Entry<K, V>>() {
-                public Iterator<Entry<K, V>>
-                    iterator()
-                {
+                @Override
+                public Iterator<Entry<K, V>> iterator() {
                     return new Iterator<Entry<K, V>>() {
                         private int pt = -1;
+
+                        @Override
                         public void remove() {
                             throw new UnsupportedOperationException();
                         }
+                        @Override
                         @SuppressWarnings("unchecked")
                         public Entry<K, V> next() {
-                            return new AbstractMapEntry(
-                                list.get(++pt), null) {};
+                            return new org.apache.commons.collections.keyvalue.AbstractMapEntry(NullValuesMap.this.list.get(++this.pt),
+                                null) {
+                            };
                         }
+                        @Override
                         public boolean hasNext() {
-                            return pt < list.size();
+                            return this.pt < NullValuesMap.this.list.size();
                         }
                     };
                 }
+                @Override
                 public int size() {
-                    return list.size();
+                    return NullValuesMap.this.list.size();
                 }
+                @Override
                 public boolean contains(Object o) {
                     if (o instanceof Entry) {
-                        if (list.contains(((Entry) o).getKey())) {
+                        if (NullValuesMap.this.list.contains(((Entry) o).getKey())) {
                             return true;
                         }
                     }
@@ -4442,40 +4206,52 @@ public class Util extends XOMUtil {
                 }
             };
         }
+        @Override
         public Set<K> keySet() {
             return new AbstractSet<K>() {
+                @Override
                 public Iterator<K> iterator() {
                     return new Iterator<K>() {
                         private int pt = -1;
+
+                        @Override
                         public void remove() {
                             throw new UnsupportedOperationException();
                         }
+                        @Override
                         public K next() {
-                            return list.get(++pt);
+                            return NullValuesMap.this.list.get(++this.pt);
                         }
+                        @Override
                         public boolean hasNext() {
-                            return pt < list.size();
+                            return this.pt < NullValuesMap.this.list.size();
                         }
                     };
                 }
+                @Override
                 public int size() {
-                    return list.size();
+                    return NullValuesMap.this.list.size();
                 }
+                @Override
                 public boolean contains(Object o) {
-                    return list.contains(o);
+                    return NullValuesMap.this.list.contains(o);
                 }
             };
         }
+        @Override
         public Collection<V> values() {
             return new AbstractList<V>() {
+                @Override
                 public V get(int index) {
                     return null;
                 }
+                @Override
                 public int size() {
-                    return list.size();
+                    return NullValuesMap.this.list.size();
                 }
+                @Override
                 public boolean contains(Object o) {
-                    if (o == null && size() > 0) {
+                    if ((o == null) && (this.size() > 0)) {
                         return true;
                     } else {
                         return false;
@@ -4483,14 +4259,17 @@ public class Util extends XOMUtil {
                 }
             };
         }
+        @Override
         public V get(Object key) {
             return null;
         }
+        @Override
         public boolean containsKey(Object key) {
-            return list.contains(key);
+            return this.list.contains(key);
         }
+        @Override
         public boolean containsValue(Object o) {
-            if (o == null && size() > 0) {
+            if ((o == null) && (this.size() > 0)) {
                 return true;
             } else {
                 return false;

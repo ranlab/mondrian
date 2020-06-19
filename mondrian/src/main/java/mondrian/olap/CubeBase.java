@@ -11,9 +11,9 @@
 
 package mondrian.olap;
 
-import mondrian.resource.MondrianResource;
-
 import java.util.List;
+
+import mondrian.resource.MondrianResource;
 
 /**
  * <code>CubeBase</code> is an abstract implementation of {@link Cube}.
@@ -58,13 +58,7 @@ public abstract class CubeBase extends OlapElementBase implements Cube {
      * @param description Description
      * @param dimensions List of dimensions
      */
-    protected CubeBase(
-        String name,
-        String caption,
-        boolean visible,
-        String description,
-        Dimension[] dimensions)
-    {
+    protected CubeBase(String name, String caption, boolean visible, String description, Dimension[] dimensions) {
         this.name = name;
         this.caption = caption;
         this.visible = visible;
@@ -74,41 +68,48 @@ public abstract class CubeBase extends OlapElementBase implements Cube {
     }
 
     // implement OlapElement
+    @Override
     public String getName() {
-        return name;
+        return this.name;
     }
 
+    @Override
     public String getUniqueName() {
         // return e.g. '[Sales Ragged]'
-        return uniqueName;
+        return this.uniqueName;
     }
 
+    @Override
     public String getQualifiedName() {
-        return MondrianResource.instance().MdxCubeName.str(getName());
+        return MondrianResource.instance().MdxCubeName.str(this.getName());
     }
 
+    @Override
     public Dimension getDimension() {
         return null;
     }
 
+    @Override
     public Hierarchy getHierarchy() {
         return null;
     }
 
+    @Override
     public String getDescription() {
-        return description;
+        return this.description;
     }
 
+    @Override
     public Dimension[] getDimensions() {
-        return dimensions;
+        return this.dimensions;
     }
 
+    @Override
     public Hierarchy lookupHierarchy(Id.NameSegment s, boolean unique) {
-        for (Dimension dimension : dimensions) {
-            Hierarchy[] hierarchies = dimension.getHierarchies();
-            for (Hierarchy hierarchy : hierarchies) {
-                String name = unique
-                    ? hierarchy.getUniqueName() : hierarchy.getName();
+        for (final Dimension dimension : this.dimensions) {
+            final Hierarchy[] hierarchies = dimension.getHierarchies();
+            for (final Hierarchy hierarchy : hierarchies) {
+                final String name = unique ? hierarchy.getUniqueName() : hierarchy.getName();
                 if (name.equals(s.getName())) {
                     return hierarchy;
                 }
@@ -117,12 +118,9 @@ public abstract class CubeBase extends OlapElementBase implements Cube {
         return null;
     }
 
-    public OlapElement lookupChild(
-        SchemaReader schemaReader,
-        Id.Segment s,
-        MatchType matchType)
-    {
-        Dimension mdxDimension = lookupDimension(s);
+    @Override
+    public OlapElement lookupChild(SchemaReader schemaReader, Id.Segment s, MatchType matchType) {
+        final Dimension mdxDimension = this.lookupDimension(s);
         if (mdxDimension != null) {
             return mdxDimension;
         }
@@ -131,20 +129,17 @@ public abstract class CubeBase extends OlapElementBase implements Cube {
 
         // Look for hierarchies named '[dimension.hierarchy]'.
         if (s instanceof Id.NameSegment) {
-            Hierarchy hierarchy = lookupHierarchy((Id.NameSegment)s, false);
+            final Hierarchy hierarchy = this.lookupHierarchy((Id.NameSegment) s, false);
             if (hierarchy != null) {
                 return hierarchy;
             }
         }
 
         // Try hierarchies, levels and members.
-        for (Dimension dimension : dimensions) {
-            OlapElement mdxElement = dimension.lookupChild(
-                schemaReader, s, matchType);
+        for (final Dimension dimension : dimensions) {
+            final OlapElement mdxElement = dimension.lookupChild(schemaReader, s, matchType);
             if (mdxElement != null) {
-                if (mdxElement instanceof Member
-                    && MondrianProperties.instance().NeedDimensionPrefix.get())
-                {
+                if ((mdxElement instanceof Member) && MondrianProperties.instance().NeedDimensionPrefix.get()) {
                     // With this property setting, don't allow members to be
                     // referenced without at least a dimension prefix. We
                     // allow [Store].[USA].[CA] or even [Store].[CA] but not
@@ -168,7 +163,7 @@ public abstract class CubeBase extends OlapElementBase implements Cube {
             return null;
         }
         final Id.NameSegment nameSegment = (Id.NameSegment) s;
-        for (Dimension dimension : dimensions) {
+        for (final Dimension dimension : this.dimensions) {
             if (Util.equalName(dimension.getName(), nameSegment.name)) {
                 return dimension;
             }
@@ -184,13 +179,13 @@ public abstract class CubeBase extends OlapElementBase implements Cube {
      * @param levelType Level type
      * @return First level of given type, or null
      */
-    private Level getTimeLevel(LevelType levelType) {
-        for (Dimension dimension : dimensions) {
+    private Level getTimeLevel(org.olap4j.metadata.Level.Type levelType) {
+        for (final Dimension dimension : this.dimensions) {
             if (dimension.getDimensionType() == DimensionType.TimeDimension) {
-                Hierarchy[] hierarchies = dimension.getHierarchies();
-                for (Hierarchy hierarchy : hierarchies) {
-                    Level[] levels = hierarchy.getLevels();
-                    for (Level level : levels) {
+                final Hierarchy[] hierarchies = dimension.getHierarchies();
+                for (final Hierarchy hierarchy : hierarchies) {
+                    final Level[] levels = hierarchy.getLevels();
+                    for (final Level level : levels) {
                         if (level.getLevelType() == levelType) {
                             return level;
                         }
@@ -201,20 +196,24 @@ public abstract class CubeBase extends OlapElementBase implements Cube {
         return null;
     }
 
+    @Override
     public Level getYearLevel() {
-        return getTimeLevel(LevelType.TimeYears);
+        return this.getTimeLevel(org.olap4j.metadata.Level.Type.TIME_YEARS);
     }
 
+    @Override
     public Level getQuarterLevel() {
-        return getTimeLevel(LevelType.TimeQuarters);
+        return this.getTimeLevel(org.olap4j.metadata.Level.Type.TIME_QUARTERS);
     }
 
+    @Override
     public Level getMonthLevel() {
-        return getTimeLevel(LevelType.TimeMonths);
+        return this.getTimeLevel(org.olap4j.metadata.Level.Type.TIME_MONTHS);
     }
 
+    @Override
     public Level getWeekLevel() {
-        return getTimeLevel(LevelType.TimeWeeks);
+        return this.getTimeLevel(org.olap4j.metadata.Level.Type.TIME_WEEKS);
     }
 }
 

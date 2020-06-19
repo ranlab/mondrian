@@ -11,8 +11,13 @@
 
 package mondrian.rolap;
 
-import mondrian.olap.*;
-import mondrian.rolap.agg.*;
+import mondrian.olap.MondrianDef;
+import mondrian.olap.Util;
+import mondrian.rolap.agg.CellRequest;
+import mondrian.rolap.agg.MemberColumnPredicate;
+import mondrian.rolap.agg.MemberTuplePredicate;
+import mondrian.rolap.agg.RangeColumnPredicate;
+import mondrian.rolap.agg.ValueColumnPredicate;
 import mondrian.spi.MemberFormatter;
 
 /**
@@ -37,82 +42,54 @@ public class RolapCubeLevel extends RolapLevel {
     private RolapCubeLevel childCubeLevel;
 
     public RolapCubeLevel(RolapLevel level, RolapCubeHierarchy cubeHierarchy) {
-        super(
-            cubeHierarchy,
-            level.getName(),
-            level.getCaption(),
-            level.isVisible(),
-            level.getDescription(),
-            level.getDepth(),
-            level.getKeyExp(),
-            level.getNameExp(),
-            level.getCaptionExp(),
-            level.getOrdinalExp(),
-            level.getParentExp(),
-            level.getNullParentValue(),
-            null,
-            level.getProperties(),
-            level.getFlags(),
-            level.getDatatype(),
-            level.getInternalType(),
-            level.getHideMemberCondition(),
-            level.getLevelType(),
-            "" + level.getApproxRowCount(),
-            level.getAnnotationMap());
+        super(cubeHierarchy, level.getName(), level.getCaption(), level.isVisible(), level.getDescription(), level.getDepth(),
+            level.getKeyExp(), level.getNameExp(), level.getCaptionExp(), level.getOrdinalExp(), level.getParentExp(),
+            level.getNullParentValue(), null, level.getProperties(), level.getFlags(), level.getDatatype(), level.getInternalType(),
+            level.getHideMemberCondition(), level.getLevelType(), "" + level.getApproxRowCount(), level.getAnnotationMap());
 
         this.rolapLevel = level;
         this.cubeHierarchy = cubeHierarchy;
         this.cubeDimension = (RolapCubeDimension) cubeHierarchy.getDimension();
-        cube = cubeDimension.getCube();
-        parentCubeLevel = (RolapCubeLevel) super.getParentLevel();
-        if (parentCubeLevel != null) {
-            parentCubeLevel.childCubeLevel = this;
+        this.cube = this.cubeDimension.getCube();
+        this.parentCubeLevel = (RolapCubeLevel) super.getParentLevel();
+        if (this.parentCubeLevel != null) {
+            this.parentCubeLevel.childCubeLevel = this;
         }
-        MondrianDef.RelationOrJoin hierarchyRel = cubeHierarchy.getRelation();
-        keyExp = convertExpression(level.getKeyExp(), hierarchyRel);
-        nameExp = convertExpression(level.getNameExp(), hierarchyRel);
-        captionExp = convertExpression(level.getCaptionExp(), hierarchyRel);
-        ordinalExp = convertExpression(level.getOrdinalExp(), hierarchyRel);
-        parentExp = convertExpression(level.getParentExp(), hierarchyRel);
-        properties = convertProperties(level.getProperties(), hierarchyRel);
+        final MondrianDef.RelationOrJoin hierarchyRel = cubeHierarchy.getRelation();
+        this.keyExp = this.convertExpression(level.getKeyExp(), hierarchyRel);
+        this.nameExp = this.convertExpression(level.getNameExp(), hierarchyRel);
+        this.captionExp = this.convertExpression(level.getCaptionExp(), hierarchyRel);
+        this.ordinalExp = this.convertExpression(level.getOrdinalExp(), hierarchyRel);
+        this.parentExp = this.convertExpression(level.getParentExp(), hierarchyRel);
+        this.properties = this.convertProperties(level.getProperties(), hierarchyRel);
     }
 
+    @Override
     void init(MondrianDef.CubeDimension xmlDimension) {
-        if (isAll()) {
+        if (this.isAll()) {
             this.levelReader = new AllLevelReaderImpl();
-        } else if (getLevelType() == LevelType.Null) {
+        } else if (this.getLevelType() == org.olap4j.metadata.Level.Type.NULL) {
             this.levelReader = new NullLevelReader();
-        } else if (rolapLevel.xmlClosure != null) {
-            RolapDimension dimension =
-                (RolapDimension)
-                    rolapLevel.getClosedPeer().getHierarchy().getDimension();
+        } else if (this.rolapLevel.xmlClosure != null) {
+            final RolapDimension dimension = (RolapDimension) this.rolapLevel.getClosedPeer().getHierarchy().getDimension();
 
-            RolapCubeDimension cubeDimension =
-                new RolapCubeDimension(
-                    getCube(), dimension, xmlDimension,
-                    getDimension().getName() + "$Closure",
-                    -1,
-                    getCube().hierarchyList,
-                    getDimension().isHighCardinality());
+            final RolapCubeDimension cubeDimension = new RolapCubeDimension(this.getCube(), dimension, xmlDimension,
+                this.getDimension().getName() + "$Closure", -1, this.getCube().hierarchyList, this.getDimension().isHighCardinality());
 
             // RME HACK
             //  WG: Note that the reason for registering this usage is so that
             //  when registerDimension is called, the hierarchy is registered
             //  successfully to the star.  This type of hack will go away once
             //  HierarchyUsage is phased out
-            if (! getCube().isVirtual()) {
-                getCube().createUsage(
-                    (RolapCubeHierarchy) cubeDimension.getHierarchies()[0],
-                    xmlDimension);
+            if (!this.getCube().isVirtual()) {
+                this.getCube().createUsage((RolapCubeHierarchy) cubeDimension.getHierarchies()[0], xmlDimension);
             }
             cubeDimension.init(xmlDimension);
-            getCube().registerDimension(cubeDimension);
-            closedPeerCubeLevel = (RolapCubeLevel)
-                cubeDimension.getHierarchies()[0].getLevels()[1];
+            this.getCube().registerDimension(cubeDimension);
+            this.closedPeerCubeLevel = (RolapCubeLevel) cubeDimension.getHierarchies()[0].getLevels()[1];
 
-            if (!getCube().isVirtual()) {
-                getCube().closureColumnBitKey.set(
-                    closedPeerCubeLevel.starKeyColumn.getBitPosition());
+            if (!this.getCube().isVirtual()) {
+                this.getCube().closureColumnBitKey.set(this.closedPeerCubeLevel.starKeyColumn.getBitPosition());
             }
 
             this.levelReader = new ParentChildLevelReaderImpl(this);
@@ -121,28 +98,16 @@ public class RolapCubeLevel extends RolapLevel {
         }
     }
 
-    private RolapProperty[] convertProperties(
-        RolapProperty[] properties,
-        MondrianDef.RelationOrJoin rel)
-    {
+    private RolapProperty[] convertProperties(RolapProperty[] properties, MondrianDef.RelationOrJoin rel) {
         if (properties == null) {
             return null;
         }
 
-        RolapProperty[] convertedProperties =
-            new RolapProperty[properties.length];
+        final RolapProperty[] convertedProperties = new RolapProperty[properties.length];
         for (int i = 0; i < properties.length; i++) {
-            RolapProperty old = properties[i];
-            convertedProperties[i] =
-                new RolapProperty(
-                    old.getName(),
-                    old.getType(),
-                    convertExpression(old.getExp(), rel),
-                    old.getFormatter(),
-                    old.getCaption(),
-                    old.dependsOnLevelValue(),
-                    old.isInternal(),
-                    old.getDescription());
+            final RolapProperty old = properties[i];
+            convertedProperties[i] = new RolapProperty(old.getName(), old.getType(), this.convertExpression(old.getExp(), rel),
+                old.getFormatter(), old.getCaption(), old.dependsOnLevelValue(), old.isInternal(), old.getDescription());
         }
         return convertedProperties;
     }
@@ -154,28 +119,21 @@ public class RolapCubeLevel extends RolapLevel {
      * @param rel the parent relation
      * @return returns the converted expression
      */
-    private MondrianDef.Expression convertExpression(
-        MondrianDef.Expression exp,
-        MondrianDef.RelationOrJoin rel)
-    {
-        if (getHierarchy().isUsingCubeFact()) {
+    private MondrianDef.Expression convertExpression(MondrianDef.Expression exp, MondrianDef.RelationOrJoin rel) {
+        if (this.getHierarchy().isUsingCubeFact()) {
             // no conversion necessary
             return exp;
-        } else if (exp == null || rel == null) {
+        } else if ((exp == null) || (rel == null)) {
             return null;
         } else if (exp instanceof MondrianDef.Column) {
-            MondrianDef.Column col = (MondrianDef.Column)exp;
+            final MondrianDef.Column col = (MondrianDef.Column) exp;
             if (rel instanceof MondrianDef.Table) {
-                return new MondrianDef.Column(
-                    ((MondrianDef.Table) rel).getAlias(),
-                    col.getColumnName());
-            } else if (rel instanceof MondrianDef.Join
-                || rel instanceof MondrianDef.Relation)
-            {
+                return new MondrianDef.Column(((MondrianDef.Table) rel).getAlias(), col.getColumnName());
+            } else if ((rel instanceof MondrianDef.Join) || (rel instanceof MondrianDef.Relation)) {
                 // need to determine correct name of alias for this level.
                 // this may be defined in level
                 // col.table
-                String alias = getHierarchy().lookupAlias(col.getTableAlias());
+                final String alias = this.getHierarchy().lookupAlias(col.getTableAlias());
                 return new MondrianDef.Column(alias, col.getColumnName());
             }
         } else if (exp instanceof MondrianDef.ExpressionView) {
@@ -184,13 +142,11 @@ public class RolapCubeLevel extends RolapLevel {
             // with the new aliased name
             return exp;
         }
-        throw new RuntimeException(
-            "conversion of Class " + exp.getClass()
-            + " unsupported at this time");
+        throw new RuntimeException("conversion of Class " + exp.getClass() + " unsupported at this time");
     }
 
     public void setStarKeyColumn(RolapStar.Column column) {
-        starKeyColumn = column;
+        this.starKeyColumn = column;
     }
 
     /**
@@ -199,11 +155,11 @@ public class RolapCubeLevel extends RolapLevel {
      * @return the RolapStar.Column related to this RolapCubeLevel
      */
     public RolapStar.Column getStarKeyColumn() {
-        return starKeyColumn;
+        return this.starKeyColumn;
     }
 
     LevelReader getLevelReader() {
-        return levelReader;
+        return this.levelReader;
     }
 
     /**
@@ -216,13 +172,13 @@ public class RolapCubeLevel extends RolapLevel {
      */
     public RolapStar.Column getBaseStarKeyColumn(RolapCube baseCube) {
         RolapStar.Column column = null;
-        if (getCube().isVirtual() && baseCube != null) {
-            RolapCubeLevel lvl = baseCube.findBaseCubeLevel(this);
+        if (this.getCube().isVirtual() && (baseCube != null)) {
+            final RolapCubeLevel lvl = baseCube.findBaseCubeLevel(this);
             if (lvl != null) {
                 column = lvl.getStarKeyColumn();
             }
         } else {
-            column = getStarKeyColumn();
+            column = this.getStarKeyColumn();
         }
         return column;
     }
@@ -233,33 +189,39 @@ public class RolapCubeLevel extends RolapLevel {
      * @return cube
      */
     public final RolapCube getCube() {
-        return cube;
+        return this.cube;
     }
 
     // override with stricter return type
+    @Override
     public final RolapCubeDimension getDimension() {
-        return cubeDimension;
+        return this.cubeDimension;
     }
 
     // override with stricter return type
+    @Override
     public final RolapCubeHierarchy getHierarchy() {
-        return cubeHierarchy;
+        return this.cubeHierarchy;
     }
 
     // override with stricter return type
+    @Override
     public final RolapCubeLevel getChildLevel() {
-        return childCubeLevel;
+        return this.childCubeLevel;
     }
 
     // override with stricter return type
+    @Override
     public final RolapCubeLevel getParentLevel() {
-        return parentCubeLevel;
+        return this.parentCubeLevel;
     }
 
+    @Override
     public String getCaption() {
-        return rolapLevel.getCaption();
+        return this.rolapLevel.getCaption();
     }
 
+    @Override
     public void setCaption(String caption) {
         // Cannot set the caption on the underlying level; other cube levels
         // might be using it.
@@ -272,7 +234,7 @@ public class RolapCubeLevel extends RolapLevel {
      * @return Underlying level
      */
     public RolapLevel getRolapLevel() {
-        return rolapLevel;
+        return this.rolapLevel;
     }
 
     public boolean equals(RolapCubeLevel level) {
@@ -280,23 +242,23 @@ public class RolapCubeLevel extends RolapLevel {
             return true;
         }
         // verify the levels are part of the same hierarchy
-        return super.equals(level)
-                && getCube().equals(level.getCube());
+        return super.equals(level) && this.getCube().equals(level.getCube());
     }
 
+    @Override
     boolean hasClosedPeer() {
-        return closedPeerCubeLevel != null;
+        return this.closedPeerCubeLevel != null;
     }
 
+    @Override
     public RolapCubeLevel getClosedPeer() {
-        return closedPeerCubeLevel;
+        return this.closedPeerCubeLevel;
     }
 
+    @Override
     public MemberFormatter getMemberFormatter() {
-        return rolapLevel.getMemberFormatter();
+        return this.rolapLevel.getMemberFormatter();
     }
-
-
 
     /**
      * Encapsulation of the difference between levels in terms of how
@@ -315,10 +277,7 @@ public class RolapCubeLevel extends RolapLevel {
          * @return true if request is unsatisfiable (e.g. if the member is the
          * null member)
          */
-        boolean constrainRequest(
-            RolapCubeMember member,
-            RolapCube baseCube,
-            CellRequest request);
+        boolean constrainRequest(RolapCubeMember member, RolapCube baseCube, CellRequest request);
 
         /**
          * Adds constraints to a cache region for a member of this level.
@@ -327,31 +286,23 @@ public class RolapCubeLevel extends RolapLevel {
          * @param baseCube base cube if virtual level
          * @param cacheRegion Cache region to be constrained
          */
-        void constrainRegion(
-            StarColumnPredicate predicate,
-            RolapCube baseCube,
-            RolapCacheRegion cacheRegion);
+        void constrainRegion(StarColumnPredicate predicate, RolapCube baseCube, RolapCacheRegion cacheRegion);
     }
 
     /**
      * Level reader for a regular level.
      */
     static final class RegularLevelReader implements LevelReader {
-        private RolapCubeLevel cubeLevel;
+        private final RolapCubeLevel cubeLevel;
 
-        RegularLevelReader(
-            RolapCubeLevel cubeLevel)
-        {
+        RegularLevelReader(RolapCubeLevel cubeLevel) {
             this.cubeLevel = cubeLevel;
         }
 
-        public boolean constrainRequest(
-            RolapCubeMember member,
-            RolapCube baseCube,
-            CellRequest request)
-        {
-            assert member.getLevel() == cubeLevel;
-            Object memberKey = member.member.getKey();
+        @Override
+        public boolean constrainRequest(RolapCubeMember member, RolapCube baseCube, CellRequest request) {
+            assert member.getLevel() == this.cubeLevel;
+            final Object memberKey = member.member.getKey();
             if (memberKey == null) {
                 if (member == member.getHierarchy().getNullMember()) {
                     // cannot form a request if one of the members is null
@@ -361,18 +312,17 @@ public class RolapCubeLevel extends RolapLevel {
                 }
             }
 
-            RolapStar.Column column = cubeLevel.getBaseStarKeyColumn(baseCube);
+            final RolapStar.Column column = this.cubeLevel.getBaseStarKeyColumn(baseCube);
 
             if (column == null) {
                 // This hierarchy is not one which qualifies the starMeasure
                 // (this happens in virtual cubes). The starMeasure only has
                 // a value for the 'all' member of the hierarchy (or for the
                 // default member if the hierarchy has no 'all' member)
-                return member != cubeLevel.hierarchy.getDefaultMember()
-                    || cubeLevel.hierarchy.hasAll();
+                return (member != this.cubeLevel.hierarchy.getDefaultMember()) || this.cubeLevel.hierarchy.hasAll();
             }
 
-            boolean isMemberCalculated = member.member.isCalculated();
+            final boolean isMemberCalculated = member.member.isCalculated();
 
             final StarColumnPredicate predicate;
             if (isMemberCalculated && !member.isParentChildLeaf()) {
@@ -385,9 +335,7 @@ public class RolapCubeLevel extends RolapLevel {
             //  optimization potential
             request.addConstrainedColumn(column, predicate);
 
-            if (request.extendedContext
-                && cubeLevel.getNameExp() != null)
-            {
+            if (request.extendedContext && (this.cubeLevel.getNameExp() != null)) {
                 final RolapStar.Column nameColumn = column.getNameColumn();
 
                 assert nameColumn != null;
@@ -400,7 +348,7 @@ public class RolapCubeLevel extends RolapLevel {
 
             // If member is unique without reference to its parent,
             // no further constraint is required.
-            if (cubeLevel.isUnique()) {
+            if (this.cubeLevel.isUnique()) {
                 return false;
             }
 
@@ -410,7 +358,7 @@ public class RolapCubeLevel extends RolapLevel {
                 if (parent == null) {
                     return false;
                 }
-                RolapCubeLevel level = parent.getLevel();
+                final RolapCubeLevel level = parent.getLevel();
                 final LevelReader levelReader = level.levelReader;
                 if (levelReader == this) {
                     // We are looking at a parent in a parent-child hierarchy,
@@ -420,17 +368,13 @@ public class RolapCubeLevel extends RolapLevel {
                     parent = parent.getParentMember();
                     continue;
                 }
-                return levelReader.constrainRequest(
-                    parent, baseCube, request);
+                return levelReader.constrainRequest(parent, baseCube, request);
             }
         }
 
-        public void constrainRegion(
-            StarColumnPredicate predicate,
-            RolapCube baseCube,
-            RolapCacheRegion cacheRegion)
-        {
-            RolapStar.Column column = cubeLevel.getBaseStarKeyColumn(baseCube);
+        @Override
+        public void constrainRegion(StarColumnPredicate predicate, RolapCube baseCube, RolapCacheRegion cacheRegion) {
+            final RolapStar.Column column = this.cubeLevel.getBaseStarKeyColumn(baseCube);
 
             if (column == null) {
                 // This hierarchy is not one which qualifies the starMeasure
@@ -441,14 +385,12 @@ public class RolapCubeLevel extends RolapLevel {
             }
 
             if (predicate instanceof MemberColumnPredicate) {
-                MemberColumnPredicate memberColumnPredicate =
-                    (MemberColumnPredicate) predicate;
-                RolapMember member = memberColumnPredicate.getMember();
-                assert member.getLevel() == cubeLevel;
+                final MemberColumnPredicate memberColumnPredicate = (MemberColumnPredicate) predicate;
+                final RolapMember member = memberColumnPredicate.getMember();
+                assert member.getLevel() == this.cubeLevel;
                 assert !member.isCalculated();
                 assert memberColumnPredicate.getMember().getKey() != null;
-                assert memberColumnPredicate.getMember().getKey()
-                    != RolapUtil.sqlNullValue;
+                assert memberColumnPredicate.getMember().getKey() != RolapUtil.sqlNullValue;
                 assert !member.isNull();
 
                 // use the member as constraint, this will give us some
@@ -456,39 +398,29 @@ public class RolapCubeLevel extends RolapLevel {
                 cacheRegion.addPredicate(column, predicate);
                 return;
             } else if (predicate instanceof RangeColumnPredicate) {
-                RangeColumnPredicate rangeColumnPredicate =
-                    (RangeColumnPredicate) predicate;
-                final ValueColumnPredicate lowerBound =
-                    rangeColumnPredicate.getLowerBound();
+                final RangeColumnPredicate rangeColumnPredicate = (RangeColumnPredicate) predicate;
+                final ValueColumnPredicate lowerBound = rangeColumnPredicate.getLowerBound();
                 RolapMember lowerMember;
                 if (lowerBound == null) {
                     lowerMember = null;
                 } else if (lowerBound instanceof MemberColumnPredicate) {
-                    MemberColumnPredicate memberColumnPredicate =
-                        (MemberColumnPredicate) lowerBound;
+                    final MemberColumnPredicate memberColumnPredicate = (MemberColumnPredicate) lowerBound;
                     lowerMember = memberColumnPredicate.getMember();
                 } else {
                     throw new UnsupportedOperationException();
                 }
-                final ValueColumnPredicate upperBound =
-                    rangeColumnPredicate.getUpperBound();
+                final ValueColumnPredicate upperBound = rangeColumnPredicate.getUpperBound();
                 RolapMember upperMember;
                 if (upperBound == null) {
                     upperMember = null;
                 } else if (upperBound instanceof MemberColumnPredicate) {
-                    MemberColumnPredicate memberColumnPredicate =
-                        (MemberColumnPredicate) upperBound;
+                    final MemberColumnPredicate memberColumnPredicate = (MemberColumnPredicate) upperBound;
                     upperMember = memberColumnPredicate.getMember();
                 } else {
                     throw new UnsupportedOperationException();
                 }
-                MemberTuplePredicate predicate2 =
-                    new MemberTuplePredicate(
-                        baseCube,
-                        lowerMember,
-                        !rangeColumnPredicate.getLowerInclusive(),
-                        upperMember,
-                        !rangeColumnPredicate.getUpperInclusive());
+                final MemberTuplePredicate predicate2 = new MemberTuplePredicate(baseCube, lowerMember,
+                    !rangeColumnPredicate.getLowerInclusive(), upperMember, !rangeColumnPredicate.getUpperInclusive());
                 // use the member as constraint, this will give us some
                 //  optimization potential
                 cacheRegion.addPredicate(predicate2);
@@ -511,25 +443,19 @@ public class RolapCubeLevel extends RolapLevel {
         private final RolapMember wrappedAllMember;
         private final RolapCubeMember allMember;
 
-        ParentChildLevelReaderImpl(RolapCubeLevel cubeLevel)
-        {
+        ParentChildLevelReaderImpl(RolapCubeLevel cubeLevel) {
             this.regularLevelReader = new RegularLevelReader(cubeLevel);
 
             // inline a bunch of fields for performance
             this.closedPeerCubeLevel = cubeLevel.closedPeerCubeLevel;
             this.closedPeerLevel = cubeLevel.rolapLevel.getClosedPeer();
-            this.wrappedAllMember = (RolapMember)
-                closedPeerLevel.getHierarchy().getDefaultMember();
-            this.allMember =
-                closedPeerCubeLevel.getHierarchy().getDefaultMember();
-            assert allMember.isAll();
+            this.wrappedAllMember = (RolapMember) this.closedPeerLevel.getHierarchy().getDefaultMember();
+            this.allMember = this.closedPeerCubeLevel.getHierarchy().getDefaultMember();
+            assert this.allMember.isAll();
         }
 
-        public boolean constrainRequest(
-            RolapCubeMember member,
-            RolapCube baseCube,
-            CellRequest request)
-        {
+        @Override
+        public boolean constrainRequest(RolapCubeMember member, RolapCube baseCube, CellRequest request) {
             // Replace a parent/child level by its closed equivalent, when
             // available; this is always valid, and improves performance by
             // enabling the database to compute aggregates.
@@ -537,31 +463,20 @@ public class RolapCubeLevel extends RolapLevel {
                 // Member has no data member because it IS the data
                 // member of a parent-child hierarchy member. Leave
                 // it be. We don't want to aggregate.
-                return regularLevelReader.constrainRequest(
-                    member, baseCube, request);
+                return this.regularLevelReader.constrainRequest(member, baseCube, request);
             } else if (request.drillThrough) {
-                return regularLevelReader.constrainRequest(
-                    member.getDataMember(), baseCube, request);
+                return this.regularLevelReader.constrainRequest(member.getDataMember(), baseCube, request);
             } else {
                 // isn't creating a member on the fly a bad idea?
-                RolapMember wrappedMember =
-                    new RolapMemberBase(
-                        wrappedAllMember, closedPeerLevel, member.getKey());
-                member =
-                    new RolapCubeMember(
-                        allMember,
-                        wrappedMember, closedPeerCubeLevel);
+                final RolapMember wrappedMember = new RolapMemberBase(this.wrappedAllMember, this.closedPeerLevel, member.getKey());
+                member = new RolapCubeMember(this.allMember, wrappedMember, this.closedPeerCubeLevel);
 
-                return closedPeerCubeLevel.getLevelReader().constrainRequest(
-                    member, baseCube, request);
+                return this.closedPeerCubeLevel.getLevelReader().constrainRequest(member, baseCube, request);
             }
         }
 
-        public void constrainRegion(
-            StarColumnPredicate predicate,
-            RolapCube baseCube,
-            RolapCacheRegion cacheRegion)
-        {
+        @Override
+        public void constrainRegion(StarColumnPredicate predicate, RolapCube baseCube, RolapCacheRegion cacheRegion) {
             throw new UnsupportedOperationException();
         }
     }
@@ -570,20 +485,14 @@ public class RolapCubeLevel extends RolapLevel {
      * Level reader for the level which contains the 'all' member.
      */
     static final class AllLevelReaderImpl implements LevelReader {
-        public boolean constrainRequest(
-            RolapCubeMember member,
-            RolapCube baseCube,
-            CellRequest request)
-        {
+        @Override
+        public boolean constrainRequest(RolapCubeMember member, RolapCube baseCube, CellRequest request) {
             // We don't need to apply any constraints.
             return false;
         }
 
-        public void constrainRegion(
-            StarColumnPredicate predicate,
-            RolapCube baseCube,
-            RolapCacheRegion cacheRegion)
-        {
+        @Override
+        public void constrainRegion(StarColumnPredicate predicate, RolapCube baseCube, RolapCacheRegion cacheRegion) {
             // We don't need to apply any constraints.
         }
     }
@@ -592,19 +501,13 @@ public class RolapCubeLevel extends RolapLevel {
      * Level reader for the level which contains the null member.
      */
     static final class NullLevelReader implements LevelReader {
-        public boolean constrainRequest(
-            RolapCubeMember member,
-            RolapCube baseCube,
-            CellRequest request)
-        {
+        @Override
+        public boolean constrainRequest(RolapCubeMember member, RolapCube baseCube, CellRequest request) {
             return true;
         }
 
-        public void constrainRegion(
-            StarColumnPredicate predicate,
-            RolapCube baseCube,
-            RolapCacheRegion cacheRegion)
-        {
+        @Override
+        public void constrainRegion(StarColumnPredicate predicate, RolapCube baseCube, RolapCacheRegion cacheRegion) {
         }
     }
 
